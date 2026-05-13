@@ -40,19 +40,19 @@ from utils import (
 # ===========================================================================
 
 ROW_HINTS = [
-    [4],
-    [4],
-    [2, 2],
-    [1, 2],
-    [1, 1]
+    [1, 1],
+    [3],
+    [2],
+    [1, 1],
+    [1, 2]
 ]
 
 COL_HINTS = [
-    [2],
-    [5],
-    [2],
-    [5],
-    [1, 2]
+    [1, 2],
+    [1],
+    [2, 1],
+    [2, 1],
+    [1, 1]
 ]
 
 # N is inferred from ROW_HINTS/COL_HINTS, so no need to set it manually.
@@ -72,6 +72,8 @@ def parse_args():
                         help='Action is treated as "Q == -1" when Q <= neg_threshold.')
     parser.add_argument('--max_outer_iters', type=int, default=200,
                         help='Safety cap on outer row/col alternations.')
+    parser.add_argument('--max_forces', type=int, default=None,
+                        help='Cap on deadlock-breaking forced guesses. Default: N*N.')
     parser.add_argument('--verbose', action='store_true',
                         help='Print the board after every pass.')
     return parser.parse_args()
@@ -178,8 +180,62 @@ def process_pass(axis, board, hints_padded, dirty_self, dirty_other,
     return changed_globally
 
 
+def force_one_cell(board, row_hints_padded, col_hints_padded,
+                   dirty_rows, dirty_cols, q_net, device, N):
+    """Deadlock-breaking step: among every undecided cell-action on every
+    still-undecided line, pick the (axis, line, action) with the highest Q
+    over valid actions, and apply it to the board. Returns True if a cell was
+    written, False if nothing was undecided (board already full or stuck in
+    some other way)."""
+    # Collect all undecided lines across both axes.
+    candidates = []  # list of (axis, line_idx)
+    for r in range(N):
+        if not is_line_complete(board[r, :]):
+            candidates.append(('row', r))
+    for c in range(N):
+        if not is_line_complete(board[:, c]):
+            candidates.append(('col', c))
+    if not candidates:
+        return False
+
+    # Build states and a flat (axis, line_idx, line) record for each.
+    states = []
+    for axis, idx in candidates:
+        line = get_line(board, axis, idx)
+        hint = row_hints_padded[idx] if axis == 'row' else col_hints_padded[idx]
+        states.append(build_state(hint, line))
+    states_t = torch.tensor(np.stack(states), dtype=torch.float32, device=device)
+    with torch.no_grad():
+        q_all = q_net(states_t).cpu().numpy()        # (num_candidates, 2N)
+
+    # Mask out invalid actions per line, then find the global argmax.
+    best = (-np.inf, None)  # (q_value, (cand_idx, action_idx))
+    for cand_idx, (axis, idx) in enumerate(candidates):
+        line = get_line(board, axis, idx)
+        mask = valid_mask_from_line(line, N)
+        q = q_all[cand_idx].copy()
+        q[mask == 0] = -np.inf
+        a = int(np.argmax(q))
+        if q[a] > best[0]:
+            best = (float(q[a]), (cand_idx, a))
+
+    if best[1] is None:
+        return False  # shouldn't happen if candidates is non-empty
+
+    q_val, (cand_idx, action_idx) = best
+    axis, line_idx = candidates[cand_idx]
+    j, f = idx_to_action(action_idx, N)
+    # Forced guess: write f (NOT -f) -- argmax is "the action that ends well",
+    # i.e. picking cell j to be f leads to +1 reward.
+    other_dirty = dirty_cols if axis == 'row' else dirty_rows
+    set_cell(board, axis, line_idx, j, f, other_dirty)
+    # The forced line itself may unlock more on the next pass.
+    (dirty_rows if axis == 'row' else dirty_cols).add(line_idx)
+    return {'axis': axis, 'line_idx': line_idx, 'j': j, 'f': f, 'q': q_val}
+
+
 def solve(N, row_hints, col_hints, q_net, device, neg_threshold,
-          max_outer_iters, verbose=False):
+          max_outer_iters, verbose=False, max_forces=None):
     board = np.zeros((N, N), dtype=np.int64)
 
     row_hints_padded = [encode_hint(h, N) for h in row_hints]
@@ -188,7 +244,13 @@ def solve(N, row_hints, col_hints, q_net, device, neg_threshold,
     dirty_rows = set(range(N))
     dirty_cols = set(range(N))
 
-    for outer in range(1, max_outer_iters + 1):
+    if max_forces is None:
+        max_forces = N * N  # generous default: at most one force per cell
+
+    force_count = 0
+    outer = 0
+    while outer < max_outer_iters:
+        outer += 1
         changed_row = process_pass('row', board, row_hints_padded,
                                    dirty_rows, dirty_cols,
                                    q_net, device, N, neg_threshold)
@@ -200,9 +262,35 @@ def solve(N, row_hints, col_hints, q_net, device, neg_threshold,
                   f"(row_changed={changed_row}, col_changed={changed_col}) ---")
             print(render_board(board, row_hints, col_hints))
             print()
-        if not changed_row and not changed_col:
+
+        if changed_row or changed_col:
+            continue  # normal progress -- keep going
+
+        # Deadlock: no -1 action was found on either axis this pass.
+        if (board != 0).all():
+            break  # board fully decided
+
+        if force_count >= max_forces:
+            if verbose:
+                print(f"(reached max_forces={max_forces}; stopping with "
+                      f"{(board == 0).sum()} unknown cells)")
             break
 
+        forced = force_one_cell(board, row_hints_padded, col_hints_padded,
+                                dirty_rows, dirty_cols, q_net, device, N)
+        if not forced:
+            break  # truly nothing left to do
+        force_count += 1
+        if verbose:
+            axis = forced['axis']
+            print(f"*** forced guess #{force_count}: "
+                  f"{axis} {forced['line_idx']}, cell {forced['j']} = "
+                  f"{'+1' if forced['f'] == 1 else '-1'} "
+                  f"(Q = {forced['q']:+.4f}) ***")
+            print()
+
+    if verbose:
+        print(f"(stopped after {outer} outer pass(es), {force_count} forced guess(es))")
     return board
 
 
@@ -294,6 +382,7 @@ def main():
         device=device,
         neg_threshold=args.neg_threshold,
         max_outer_iters=args.max_outer_iters,
+        max_forces=args.max_forces,
         verbose=args.verbose,
     )
 
