@@ -31,4 +31,5 @@ def create_agent(config: dict, **kwargs) -> BaseAgent:
 
 
 # Import all agent modules to trigger registration
-from nonogram.agents import dqn, double_dqn, ppo  # noqa: E402, F401
+from nonogram.agents import dqn, double_dqn, ppo, crl  # noqa: E402, F401
+

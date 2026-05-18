@@ -74,20 +74,20 @@ def train_dqn_family(config: dict, device: torch.device):
     best_success_rate = 0.0
 
     print(f"Training {config['agent']['type']} + {config['model']['type']} "
-          f"(N={N}) on {device}")
+          f"(N={N}) on {device}", flush=True)
     if env_type == "board":
-        print(f"Mode: {mode}  |  Env: board  |  early_stop: {env.early_stop}")
+        print(f"Mode: {mode}  |  Env: board  |  early_stop: {env.early_stop}", flush=True)
     else:
         print(f"Mode: {mode}  |  Env: line  |  reward_type: {env.reward_type}  |  "
-              f"early_stop: {env.early_stop}")
+              f"early_stop: {env.early_stop}", flush=True)
     if mode in ("towards", "mixed"):
-        print(f"towards_ratio: {towards_ratio}")
-    print(f"Experiment: {exp_dir}")
-    print()
+        print(f"towards_ratio: {towards_ratio}", flush=True)
+    print(f"Experiment: {exp_dir}", flush=True)
+    print(flush=True)
 
     # 역방향 커리큘럼(Reverse Curriculum) 설정 및 상태 초기화
     curriculum_cfg = training_cfg.get("curriculum", {})
-    curriculum_enabled = curriculum_cfg.get("enabled", False) and env_type == "board"
+    curriculum_enabled = curriculum_cfg.get("enabled", False)
     curriculum_type = curriculum_cfg.get("type", "linear")  # "linear" | "cosine" | "adaptive"
     
     start_ratio = 0.0
@@ -95,7 +95,10 @@ def train_dqn_family(config: dict, device: torch.device):
     if curriculum_enabled:
         start_ratio = curriculum_cfg.get("start_ratio", 0.8)
         if start_ratio == "auto":
-            start_ratio = (N * N - 1) / (N * N)
+            if env_type == "board":
+                start_ratio = (N * N - 1) / (N * N)
+            else:
+                start_ratio = (N - 1) / N
         else:
             start_ratio = float(start_ratio)
         end_ratio = float(curriculum_cfg.get("end_ratio", 0.0))
@@ -124,10 +127,7 @@ def train_dqn_family(config: dict, device: torch.device):
         else:
             reveal_ratio = 0.0
 
-        if env_type == "board":
-            state = env.reset(reveal_ratio=reveal_ratio)
-        else:
-            state = env.reset()
+        state = env.reset(reveal_ratio=reveal_ratio)
 
         # 모드 결정
         if mode == "towards":
@@ -202,12 +202,14 @@ def train_dqn_family(config: dict, device: torch.device):
 
         # 에피소드 종료 후 n-step 미래 상태를 매칭하여 에이전트 버퍼로 전달
         lql_n = config["agent"].get("lql_n_step", 3)
+        row_hints = env.row_hints if hasattr(env, "row_hints") else None
+        col_hints = env.col_hints if hasattr(env, "col_hints") else None
         for i in range(len(episode_buffer)):
             s, a, r, ns, d = episode_buffer[i]
             # n-step 뒤의 상태 찾기 (없으면 에피소드 마지막 상태)
             future_idx = min(i + lql_n, len(episode_buffer) - 1)
             future_s = episode_buffer[future_idx][3] # next_state of future step
-            agent.store_transition(s, a, r, ns, d, future_state=future_s)
+            agent.store_transition(s, a, r, ns, d, future_state=future_s, row_hints=row_hints, col_hints=col_hints)
 
         reward_history.append(total_reward)
         # success 판정
@@ -240,17 +242,17 @@ def train_dqn_family(config: dict, device: torch.device):
             avg_s = float(np.mean(success_history[-window:]))
             elapsed = time.time() - t_start
             eps = agent.get_epsilon()
-            if curriculum_cfg.get("enabled", False) and env_type == "board":
+            if curriculum_cfg.get("enabled", False):
                 print(f"[ep {episode+1:6d}/{training_cfg['num_episodes']}] "
                       f"avg_reward={avg_r:+.3f}  success_rate={avg_s:.3f}  "
                       f"reveal={reveal_ratio:.3f}  "
                       f"ε={eps:.3f}  buffer={len(agent.buffer)}  "
-                      f"steps={agent.step_count}  ({elapsed:.0f}s)")
+                      f"steps={agent.step_count}  ({elapsed:.0f}s)", flush=True)
             else:
                 print(f"[ep {episode+1:6d}/{training_cfg['num_episodes']}] "
                       f"avg_reward={avg_r:+.3f}  success_rate={avg_s:.3f}  "
                       f"ε={eps:.3f}  buffer={len(agent.buffer)}  "
-                      f"steps={agent.step_count}  ({elapsed:.0f}s)")
+                      f"steps={agent.step_count}  ({elapsed:.0f}s)", flush=True)
 
             # Best model 저장
             if avg_s > best_success_rate:
@@ -434,10 +436,10 @@ def main():
     np.random.seed(seed)
     torch.manual_seed(seed)
 
-    print(f"Using device: {device}")
+    print(f"Using device: {device}", flush=True)
 
     agent_type = config["agent"]["type"]
-    if agent_type in ("dqn", "double_dqn"):
+    if agent_type in ("dqn", "double_dqn", "crl"):
         train_dqn_family(config, device)
     elif agent_type == "ppo":
         train_ppo(config, device)

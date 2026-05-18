@@ -1,0 +1,42 @@
+# 10x10 Line Contrastive RL (HER 모드)
+env:
+  N: 10
+  type: "line"
+  reward_type: "feasibility"
+  early_stop: true
+
+device: "auto"
+
+model:
+  type: "deep_line_crl"      # 1D Line 전용 초심층 대비 학습 모델
+  hidden_dim: 128
+  num_layers: 10             # 1D Line 스케일에 맞춘 연산 최적 레이어 수 (20에서 10으로 조정)
+  dropout: 0.1
+
+agent:
+  type: "crl"                # Contrastive RL 에이전트
+  crl_mode: "her"            # 미래 도달 상태 매칭 학습 모드 (HER)
+  crl_temperature: 0.15      # SimCLR/대비 강화학습에 보다 안정적인 부드러운 온도 값
+  lr: 0.0003                 # 20층 초심층 네트워크의 정밀한 학습을 위한 표준 Adam lr (3e-4)
+  batch_size: 256
+  buffer_size: 100000
+  min_buffer: 1000
+  train_freq: 1
+  grad_clip: 1.0
+  # 탐색 스케줄 최적화 (에피소드가 아닌 개별 환경 Step 단위 기준)
+  epsilon_start: 1.0
+  epsilon_end: 0.05
+  epsilon_decay: 200000      # 200,000 steps (약 20,000 에피소드 동안 서서히 감쇠하여 전체 학습의 40% 영역 탐색 보장)
+
+training:
+  num_episodes: 50000
+  mode: "rl"                 # 순수 강화학습 탐색
+  towards_ratio: 0.0
+  log_freq: 100
+  seed: 42
+  exp_name: "crl_line_her_10x10"
+
+solver:
+  type: "line"
+  neg_threshold: -0.5
+  max_outer_iters: 200

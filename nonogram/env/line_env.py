@@ -22,7 +22,7 @@ class LineEnv:
         self.gt_line = None
         self.hint = None
 
-    def reset(self, gt_line: np.ndarray = None, hint: list = None) -> np.ndarray:
+    def reset(self, gt_line: np.ndarray = None, hint: list = None, reveal_ratio: float = 0.0) -> np.ndarray:
         if gt_line is not None:
             self.gt_line = gt_line.copy()
             self.hint = self._extract_hint(self.gt_line)
@@ -34,6 +34,15 @@ class LineEnv:
             self.hint = self._extract_hint(self.gt_line)
             
         self.state = initial_state(self.hint, self.N)
+        
+        # 역방향 커리큘럼 학습 (1D Line 버전): 정답 줄의 일부를 미리 공개
+        if reveal_ratio > 0.0 and self.gt_line is not None:
+            num_reveal = int(self.N * reveal_ratio)
+            if num_reveal > 0:
+                indices = np.random.choice(self.N, size=num_reveal, replace=False)
+                for idx in indices:
+                    self.state[-self.N + idx] = self.gt_line[idx]
+                    
         return self.state
 
     def step(self, action: int) -> tuple[np.ndarray, float, bool]:

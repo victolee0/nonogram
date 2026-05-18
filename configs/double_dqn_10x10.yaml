@@ -25,7 +25,7 @@ agent:
   grad_clip: 10.0
   epsilon_start: 1.0
   epsilon_end: 0.02
-  epsilon_decay: 30000
+  epsilon_decay: 150000
   # LQL (arXiv:2605.05812)
   lql_weight: 0.2            # LQL 부등식 손실 가중치
   lql_n_step: 3              # 비교할 미래 스텝 거리
@@ -34,12 +34,19 @@ agent:
   per_beta: 0.4
 
 training:
-  num_episodes: 100000
+  num_episodes: 300000
   mode: "rl"                 # rl | towards | mixed
   towards_ratio: 0.5
   log_freq: 1000
   seed: 42
   exp_name: "double_dqn_10x10"
+
+  curriculum:
+    enabled: true
+    type: "cosine"
+    start_ratio: auto
+    end_ratio: 0.0
+    decay_episodes: 100000
 
 solver:
   type: "line"

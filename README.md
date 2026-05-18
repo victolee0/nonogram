@@ -20,6 +20,10 @@
 │   ├── board_dqn_10x10.yaml    # 10x10 2D Board DQN
 │   ├── dqn_chunking_mlp_10x10.yaml  # 10x10 DQN + Action Chunking (MLP)
 │   ├── dqn_chunking_transformer_10x10.yaml # 10x10 DQN + Action Chunking (Transformer)
+│   ├── crl_clue_10x10.yaml     # 10x10 2D Board Clue 매칭 Contrastive RL
+│   ├── crl_her_10x10.yaml      # 10x10 2D Board HER 기반 Contrastive RL
+│   ├── crl_line_clue_10x10.yaml # 10x10 1D Line Clue 매칭 Contrastive RL
+│   ├── crl_line_her_10x10.yaml  # 10x10 1D Line HER 기반 Contrastive RL
 │   └── alphazero_2d.yaml       # AlphaZero 2D MCTS + Transformer
 ├── nonogram/                   # 메인 패키지
 │   ├── config.py               # Config 로딩 및 유효성 검증
@@ -33,13 +37,15 @@
 │   │   ├── mlp.py              # MLP (기존 QNetwork 호환)
 │   │   ├── dueling.py          # Dueling DQN (Shared, Advantage, Value)
 │   │   ├── cnn.py              # 1D CNN
-│   │   └── board_cnn.py        # 2D Board CNN
+│   │   ├── board_cnn.py        # 2D Board CNN
+│   │   └── deep_crl.py         # 초심층 대비 학습 모델 (LayerScale, GroupNorm 탑재)
 │   ├── agents/                 # RL 알고리즘
 │   │   ├── registry.py         # 에이전트 레지스트리
 │   │   ├── base.py             # 베이스 클래스 (LQL 손실 추가)
 │   │   ├── dqn.py              # 표준 DQN (LQL 적용)
 │   │   ├── double_dqn.py       # Double DQN (LQL 적용)
-│   │   └── ppo.py              # PPO (LQL 적용)
+│   │   ├── ppo.py              # PPO (LQL 적용)
+│   │   └── crl.py              # Contrastive RL 에이전트 (InfoNCE 대비 손실 적용)
 │   ├── solvers/                # 2D 풀이 전략
 │   │   ├── registry.py         # 풀이기 레지스트리
 │   │   ├── line_solver.py      # 줄 교대 풀이 (DQN 기반 2D 풀이)
@@ -99,20 +105,31 @@ uv sync
 - **Hinge Loss 기반 손실**: 가치가 비정상적으로 역전될 경우 페널티를 부과하여 가치 함수 전반의 논리적 일관성을 확보합니다.
 - 적용 대상: DQN, Double DQN, PPO, AlphaZero 2D 에이전트 전반 적용.
 
-### 4. 역방향 커리큘럼 학습 (Reverse Curriculum Learning) — 2D 보드 전용 지원
+### 4. 역방향 커리큘럼 학습 (Reverse Curriculum Learning) — 1D 줄 및 2D 보드 전체 지원
 초기 상태 탐색의 희소 보상 문제를 방지하고 점진적으로 학습을 심화하도록 설계되었습니다.
-- **정답 기반 초기 채우기**: 에피소드 초기 단계에서 보드의 일부 칸을 정답 값으로 채워진 상태로 시작합니다.
+- **정답 기반 초기 채우기**: 에피소드 초기 단계에서 1D 줄(또는 2D 보드)의 일부 칸을 정답 값으로 채워진 상태로 시작합니다.
 - **다양한 동적 난이도 조절 유형 지원**:
   * **Linear Decay (`type: "linear"`)**: 에피소드 진행도에 따라 난이도(비공개 칸 수)를 선형적으로 증가시킵니다.
   * **Cosine Annealing (`type: "cosine"`)**: 코사인 그래프 형상을 따라 초반에는 천천히 비워지다 중간에 빠르게 난이도를 올리고 후반에 완만하게 빈 보드로 수렴시킵니다.
   * **Performance-based Adaptive Decay (`type: "adaptive"`)**: 에이전트의 실시간 성공 성과를 분석하여 **자동으로 난이도를 가감**합니다. 최근 슬라이딩 성공률이 상한 임계치(예: `0.8`)를 넘으면 빈 칸을 늘려 난이도를 올리고, 하한 임계치(예: `0.2`) 미만으로 떨어지면 난이도를 낮춰 정답 지원을 늘리는(Backtracking) 유연한 적응형 학습을 실현합니다.
-- **자동 한 칸 시작 ("auto")**: `start_ratio: "auto"` 설정을 통해 보드 크기에 맞추어 **정확히 단 1칸만 비우도록** (공개 비율 $\frac{N^2-1}{N^2}$) 초기 비율을 계산하여 수렴을 극대화합니다.
+- **자동 한 칸 시작 ("auto")**: `start_ratio: "auto"` 설정을 통해 크기에 맞추어 **정확히 단 1칸만 비우도록** (공개 비율 $\frac{Size-1}{Size}$) 초기 비율을 계산하여 수렴을 극대화합니다.
+
 
 ### 5. Action Chunking (Q-chunking) 기법 탑재 (NeurIPS 2025)
 노노그램의 **장기 목표(Long-Horizon)**와 **희소 보상(Sparse-Reward)** 문제를 완화하기 위해 한 번의 추론으로 여러 스텝의 행동을 결정하고 실행하는 Action Chunking 기법을 통합하였습니다.
 - **일관된 다중 탐색 (Temporal Coherence)**: 매 스텝 Q-value를 평가하는 대신, 한 번의 순방향 전파(forward pass)로 확신도가 높은 여러 셀의 플레이를 하나의 척(Chunk)으로 묶어 실행(Open-loop)합니다.
 - **가치 백업 건너뛰기 (Skipped TD-backup)**: 척을 실행하고 난 뒤의 최종 상태($s_{t+H}$)를 기준으로 척 내부 액션들의 가치 함수를 n-step TD 목표값으로 업데이트하여 보상 정보를 빠르게 역방향 전파시킵니다.
 - 적용 대상: DQN, Double DQN (MLP & Transformer) 에이전트에 적용 가능.
+
+### 6. 초심층 대비 강화학습 (Contrastive RL) 기법 탑재 (arXiv:2503.14858)
+딥 네트워크 스케일링에서 겪는 학습 불안정성과 기울기 폭발/소실 문제를 혁신적으로 극복하기 위해 대비 학습(Contrastive RL) 방법론을 노노그램에 완벽하게 내장하였습니다. 본 구현은 **2D Board 환경**과 **1D Line 환경**을 모두 공식 지원합니다.
+- **초안정성 Deep ResNet 아키텍처**: Pre-LayerNorm, GroupNorm(소규모 배치 친화적), GELU 및 **LayerScale** ($10^{-3}$ 스케일 팩터)을 통합 설계하여 수십~수백 층 레이어에서도 수렴합니다.
+- **InfoNCE 손실 함수**: 행동이 취해진 로컬 상태 표현 $\Phi(s, a)$와 도달하려는 글로벌 목표 표현 $\Psi(g)$의 매칭 관계를 배치 내 분류 문제(Classification)로 변환해 불확정성을 완전히 제어합니다.
+- **방식 1 (HER 모드)**: Hindsight Experience Replay 방식을 결합하여, 에피소드의 미래 상태 $s_{t+k}$를 목표 $g$로 동적 추출하고 학습합니다.
+- **방식 2 (Clue 모드)**: 주 단서(row/col clues)를 목표 $g$로 설정하여, 목표 단서를 만족하는 행동 쌍을 집중 매칭하는 방식으로 학습 효율을 향상합니다.
+- **적용 대상**:
+  - **2D Board**: `configs/crl_clue_10x10.yaml`, `configs/crl_her_10x10.yaml`로 훈련 가능.
+  - **1D Line**: `configs/crl_line_clue_10x10.yaml`, `configs/crl_line_her_10x10.yaml`로 훈련 가능.
 
 ---
 
@@ -207,6 +224,18 @@ uv run python scripts/train.py --config configs/board_ppo_10x10.yaml
 
 # 10x10 PPO + Board Bipartite GNN 학습 (LQL 탑재, 2D 이분 그래프 구조)
 uv run python scripts/train.py --config configs/board_gnn_ppo_10x10.yaml
+
+# 10x10 2D Board Clue-Board 매칭 대비 학습 (Contrastive RL)
+uv run python scripts/train.py --config configs/crl_clue_10x10.yaml
+
+# 10x10 2D Board HER 기반 상태 도달 대비 학습 (Contrastive RL)
+uv run python scripts/train.py --config configs/crl_her_10x10.yaml
+
+# 10x10 1D Line Clue 매칭 대비 학습 (Contrastive RL)
+uv run python scripts/train.py --config configs/crl_line_clue_10x10.yaml
+
+# 10x10 1D Line HER 기반 대비 학습 (Contrastive RL)
+uv run python scripts/train.py --config configs/crl_line_her_10x10.yaml
 ```
 
 ### AlphaZero 2D 학습 (train_alphazero.py)
@@ -240,10 +269,14 @@ uv run python scripts/inference.py --config configs/double_dqn_10x10.yaml --hint
 | :--- | :--- | :--- | :--- |
 | `env.N` | Integer | NOT NULL, $\ge 5$ | 노노그램 보드 크기 ($N \times N$) |
 | `env.reward_type` | String | sparse \| feasibility \| step_correct | 에이전트의 보상 형태 |
-| `model.type` | String | mlp \| dueling \| cnn \| board_cnn | 가치/정책 네트워크 구조 |
-| `agent.type` | String | dqn \| double_dqn \| ppo \| alphazero_2d | 강화학습 알고리즘 종류 |
+| `model.type` | String | mlp \| dueling \| cnn \| board_cnn \| deep_crl \| deep_line_crl | 가치/정책/대비 네트워크 구조 |
+| `model.num_layers` | Integer | $\ge 1$ | 초심층 대비 학습 모델 레이어 수 (ResNet 1D/2D 블록 수) |
+| `model.dropout` | Float | $0.0 \sim 1.0$ | 드롭아웃 확률 |
+| `agent.type` | String | dqn \| double_dqn \| ppo \| alphazero_2d \| crl | 강화학습 알고리즘 종류 |
+| `agent.crl_mode` | String | clue \| her | 대비 학습 매칭 모드 (Clue 매칭 또는 HER 미래 상태 매칭) |
+| `agent.crl_temperature`| Float | $\ge 0.0$ | InfoNCE 분류 온도 하이퍼파라미터 (기본 0.1) |
 | `agent.lql_weight` | Float | $\ge 0.0$ | LQL 단조성 제약 손실 비중 |
-| `agent.lql_n_step` | Integer | $\ge 1$ | LQL 가치 비교 시점 간격 |
+| `agent.lql_n_step` | Integer | $\ge 1$ | LQL 및 HER 상태 간격 단계 |
 | `agent.action_chunking` | Boolean | NOT NULL | Action Chunking 활성화 여부 |
 | `agent.chunk_size` | Integer | $\ge 1$ | 한 번에 실행할 액션 척의 크기 |
 | `training.reward_shaping` | Boolean | NOT NULL | A: 부분 달성도 기반 연속 보상 사용 여부 |
@@ -288,6 +321,8 @@ uv run python scripts/inference.py --config configs/double_dqn_10x10.yaml --hint
 | 1D DQN 5x5 | `dqn_5x5.yaml` | hint_satisfied **98%**, exact_match **90%** |
 | 1D DQN 10x10 | `dqn_10x10.yaml` | 학습 수렴 확인 |
 | Double DQN 10x10 | `double_dqn_10x10.yaml` | LQL 적용 및 체크포인트 최적 보존 완료 |
+| Contrastive RL 2D 10x10 | `crl_clue_10x10.yaml` & `crl_her_10x10.yaml` | 초심층 ResNet2D + InfoNCE 학습 안정성 검증 완료 |
+| Contrastive RL 1D 10x10 | `crl_line_clue_10x10.yaml` & `crl_line_her_10x10.yaml` | 초심층 ResNet1D + InfoNCE 학습 안정성 검증 완료 |
 | AlphaZero 2D 10x10 | `alphazero_2d.yaml` | Axial-Attention + LQL 튜닝 및 학습 재개 |
 
 ---

@@ -1,0 +1,47 @@
+# 10x10 Clue-Board Matching Contrastive RL Config
+env:
+  N: 10
+  type: "board"
+  reward_type: "feasibility"
+  early_stop: true
+  reward_shaping: false
+  reward_shaping_weight: 0.1
+
+device: "auto"
+
+model:
+  type: "deep_crl"
+  hidden_dim: 128
+  num_layers: 20
+  dropout: 0.1
+
+agent:
+  type: "crl"
+  crl_mode: "clue"              # clue: 단서-보드 매칭 방식 | her: HER 상태 도달 방식
+  crl_temperature: 0.1         # InfoNCE 온도 하이퍼파라미터
+  lr: 0.0001                   # 초심층 학습 안정을 위한 보수적 lr
+  batch_size: 128
+  buffer_size: 50000
+  min_buffer: 1000
+  epsilon_start: 1.0
+  epsilon_end: 0.05
+  epsilon_decay: 20000
+  train_freq: 1
+  grad_clip: 1.0
+  lql_n_step: 3                 # HER 모드 시 미래 스텝 선택을 위한 타겟 n
+
+training:
+  num_episodes: 100000
+  mode: "mixed"                 # clue 모드는 towards/mixed에서 전문가 궤적(Positive)을 통해 빛을 발함
+  towards_ratio: 0.5
+  log_freq: 1000
+  seed: 42
+  exp_name: "crl_clue_10x10"
+
+solver:
+  type: "line"
+  neg_threshold: -0.5
+  max_outer_iters: 200
+
+experiment:
+  name: "crl_clue_10x10"

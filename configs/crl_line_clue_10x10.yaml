@@ -1,0 +1,42 @@
+# 10x10 Line Contrastive RL (Clue 매칭 모드)
+env:
+  N: 10
+  type: "line"
+  reward_type: "feasibility"
+  early_stop: true
+
+device: "auto"
+
+model:
+  type: "deep_line_crl"      # 1D Line 전용 초심층 대비 학습 모델
+  hidden_dim: 128
+  num_layers: 10             # 1D Line 스케일에 맞춘 연산 최적 레이어 수 (20에서 10으로 조정)
+  dropout: 0.1
+
+agent:
+  type: "crl"                # Contrastive RL 에이전트
+  crl_mode: "clue"           # 단서(Clue) 목표 매칭 학습 모드
+  crl_temperature: 0.15      # SimCLR/대비 강화학습에 보다 안정적인 부드러운 온도 값
+  lr: 0.0003                 # 20층 초심층 네트워크의 정밀한 학습을 위한 표준 Adam lr (3e-4)
+  batch_size: 256
+  buffer_size: 100000
+  min_buffer: 1000
+  train_freq: 1
+  grad_clip: 1.0
+  # 탐색 스케줄 최적화 (에피소드가 아닌 개별 환경 Step 단위 기준)
+  epsilon_start: 1.0
+  epsilon_end: 0.05
+  epsilon_decay: 150000      # 150,000 steps (약 15,000 에피소드 동안 서서히 감쇠하여 전체 학습의 30% 영역 커버)
+
+training:
+  num_episodes: 50000
+  mode: "mixed"              # 전문가 행동이 절반 섞인 학습
+  towards_ratio: 0.5
+  log_freq: 100
+  seed: 42
+  exp_name: "crl_line_clue_10x10"
+
+solver:
+  type: "line"
+  neg_threshold: -0.5
+  max_outer_iters: 200
