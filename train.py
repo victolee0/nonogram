@@ -78,8 +78,9 @@ def parse_args():
                         help='Disable feasibility-based early stopping.')
     # Logging / checkpointing
     parser.add_argument('--save_path', type=str, default='qnet.pt')
-    parser.add_argument('--log_freq', type=int, default=500)
-    parser.add_argument('--seed', type=int, default=42)
+    # LQL (arXiv:2605.05812)
+    parser.add_argument('--lql_weight', type=float, default=0.2)
+    parser.add_argument('--lql_n_step', type=int, default=3)
     return parser.parse_args()
 
 
@@ -159,6 +160,7 @@ def main():
 
         total_reward = 0.0
         done = False
+        episode_history = []
         while not done:
             # ---- choose action ----
             if args.mode == 'mix':
@@ -176,7 +178,7 @@ def main():
                 break
 
             next_state, reward, done = step_env(state, a, hint_part, N, use_early_stop)
-            buffer.append((state.copy(), a, reward, next_state.copy(), float(done)))
+            episode_history.append((state.copy(), a, reward, next_state.copy(), float(done)))
             state = next_state
             total_reward += reward
             step_count += 1
@@ -184,32 +186,52 @@ def main():
             # ---- training step ----
             if len(buffer) >= args.min_buffer and step_count % args.train_freq == 0:
                 batch = random.sample(buffer, args.batch_size)
-                b_states, b_actions, b_rewards, b_next_states, b_dones = zip(*batch)
+                b_states, b_actions, b_rewards, b_next_states, b_dones, b_futures = zip(*batch)
 
                 b_states_t = torch.tensor(np.array(b_states), dtype=torch.float32, device=device)
                 b_actions_t = torch.tensor(b_actions, dtype=torch.long, device=device)
                 b_rewards_t = torch.tensor(b_rewards, dtype=torch.float32, device=device)
                 b_next_t = torch.tensor(np.array(b_next_states), dtype=torch.float32, device=device)
                 b_dones_t = torch.tensor(b_dones, dtype=torch.float32, device=device)
+                b_futures_t = torch.tensor(np.array(b_futures), dtype=torch.float32, device=device)
 
                 q_pred = q_net(b_states_t).gather(1, b_actions_t.unsqueeze(1)).squeeze(1)
 
                 with torch.no_grad():
+                    # Target Q (Standard)
                     next_q = target_net(b_next_t)
-                    # mask invalid actions in the next state
                     next_masks = np.stack([valid_actions_mask(s, N) for s in b_next_states])
                     next_masks_t = torch.tensor(next_masks, dtype=torch.float32, device=device)
                     next_q = next_q.masked_fill(next_masks_t == 0, -1e9)
                     next_q_max = next_q.max(dim=1).values
-                    # in terminal states we have no valid next action; (1-done) zeroes that out
-                    target = b_rewards_t + (1.0 - b_dones_t) * next_q_max  # gamma = 1
+                    target = b_rewards_t + (1.0 - b_dones_t) * next_q_max
+                    
+                    # Target Q for LQL (Future Value)
+                    next_q_fut = target_net(b_futures_t)
+                    fut_masks = np.stack([valid_actions_mask(s, N) for s in b_futures])
+                    fut_masks_t = torch.tensor(fut_masks, dtype=torch.float32, device=device)
+                    next_q_fut = next_q_fut.masked_fill(fut_masks_t == 0, -1e9)
+                    v_future = next_q_fut.max(dim=1).values
 
-                loss = nn.functional.mse_loss(q_pred, target)
+                # Standard MSE Loss
+                mse_loss = nn.functional.mse_loss(q_pred, target)
+                
+                # LQL Loss: Q(s_t, a_t) >= V(s_{t+n})
+                lql_loss = torch.mean(torch.nn.functional.relu(v_future - q_pred)**2)
+                
+                loss = mse_loss + args.lql_weight * lql_loss
+                
                 optimizer.zero_grad()
                 loss.backward()
-                # clip just in case
                 torch.nn.utils.clip_grad_norm_(q_net.parameters(), 10.0)
                 optimizer.step()
+
+        # 에피소드 종료 후 n-step 매칭하여 버퍼에 저장
+        for i in range(len(episode_history)):
+            s, a, r, ns, d = episode_history[i]
+            f_idx = min(i + args.lql_n_step, len(episode_history) - 1)
+            future_s = episode_history[f_idx][3] # next_state of future step
+            buffer.append((s, a, r, ns, d, future_s))
 
             # ---- target network sync ----
             if step_count % args.target_update_freq == 0:

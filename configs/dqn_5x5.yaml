@@ -1,0 +1,29 @@
+# 5x5 표준 DQN
+env:
+  N: 5
+  reward_type: "feasibility" # sparse | feasibility | step_correct
+
+device: "auto"
+
+model:
+  type: "mlp"                # mlp | dueling | cnn | board_cnn
+  hidden_dim: 128
+  num_layers: 3
+
+agent:
+  type: "dqn"                # dqn | double_dqn | ppo
+  lr: 0.001
+  use_per: true              # PER 활성화 여부
+  per_alpha: 0.6
+  per_beta: 0.4
+  epsilon_start: 1.0
+  epsilon_end: 0.05
+  epsilon_decay: 5000
+
+training:
+  num_episodes: 30000
+  mode: "rl"                 # rl | towards | mixed
+  log_freq: 500
+
+experiment:
+  name: "dqn_5x5"

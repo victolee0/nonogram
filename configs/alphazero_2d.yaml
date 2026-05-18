@@ -1,0 +1,46 @@
+env:
+  N: 10
+
+model:
+  type: "alphazero_2d"
+  hidden_dim: 256                # 보드 크기에 맞춰 표현력 확대
+  num_heads: 8                   # 복잡한 행/열 관계 파악을 위해 head 추가
+  num_layers: 4
+
+agent:
+  num_simulations: 40            # 가속형: MCTS 시뮬레이션 횟수를 150 -> 40으로 축소
+  batch_size: 256
+  buffer_size: 100000
+  min_buffer: 2000               # 빠른 학습 시작을 위해 5000 -> 2000으로 축소
+  sync_freq: 5
+  lr: 0.0005                     # 더 신중한 수렴을 위해 학습률 하향
+  weight_decay: 0.0001
+  num_workers: 4
+  episodes_per_task: 1           # 가속형: 태스크당 에피소드를 5 -> 1로 축소하여 조밀한 진행 로그 확보
+  max_grad_updates_per_task: 15  # 탐색 데이터가 풍부해짐에 따라 업데이트 횟수 상향
+  lql_weight: 0.3                # 논리적 일관성 학습 비중 강화
+  lql_n_step: 5                  # 더 장기적인 영향을 고려
+
+mcts:
+  c_puct: 3.0                    # 넓어진 액션 공간 탐색 장려
+  dirichlet_alpha: 0.15          # 액션 수 증가에 따른 노이즈 집중도 조정
+  dirichlet_epsilon: 0.25
+  temperature: 1.0
+  temp_threshold_ratio: 0.4      # 조금 더 일찍 Greedy하게 전환
+  action_masking: true           # 불가능한 액션 사전 차단 여부
+
+training:
+  num_episodes: 50000
+  seed: 42
+  log_freq: 100
+  value_loss_weight: 0.5         # policy vs value loss 밸런스
+  lql_weight: 0.2                # LQL 부등식 손실 가중치 (arXiv:2605.05812)
+  lql_n_step: 3                  # 비교할 미래 스텝 거리
+  reward_shaping: true           # A: 부분 달성도 연속 보상 사용 여부
+  pretrain_bc: true              # B: MCTS 학습 시작 전 Behavior Cloning 사전 학습 여부
+  pretrain_episodes: 3000        # BC 학습용 에피소드 수
+  pretrain_lr: 0.001             # BC 학습용 learning rate
+
+experiment:
+  save_path: "alphazero_N10.pt"  # 10x10이므로 저장 모델 파일명 수정
+  resume: false                 # true로 설정 시 기존 체크포인트에서 재개

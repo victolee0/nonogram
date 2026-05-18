@@ -1,0 +1,43 @@
+# 10x10 PPO
+env:
+  N: 10
+  reward_type: "feasibility" # sparse | feasibility | step_correct
+  early_stop: true
+  reward_shaping: false
+  reward_shaping_weight: 0.1
+
+device: "auto"
+
+model:
+  type: "mlp"                # mlp | dueling | cnn | board_cnn
+  hidden_dim: 256
+  num_layers: 3
+
+agent:
+  type: "ppo"                # dqn | double_dqn | ppo
+  lr: 0.0003
+  gamma: 1.0
+  grad_clip: 0.5
+  ppo_epochs: 4
+  ppo_clip: 0.2
+  entropy_coef: 0.01
+  value_coef: 0.5
+  rollout_steps: 256
+  lql_weight: 0.2            # LQL 부등식 손실 가중치
+  lql_n_step: 3              # 비교할 미래 스텝 거리
+
+training:
+  num_episodes: 100000
+  mode: "rl"                 # rl | towards | mixed
+  towards_ratio: 0.5
+  log_freq: 1000
+  seed: 42
+  exp_name: "ppo_10x10"
+
+solver:
+  type: "line"
+  neg_threshold: -0.5
+  max_outer_iters: 200
+
+experiment:
+  name: "ppo_10x10"

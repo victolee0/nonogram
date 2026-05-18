@@ -1,0 +1,58 @@
+# 10x10 2D Board DQN
+env:
+  type: "board"              # line | board
+  N: 10
+  reward_type: "feasibility" # sparse | feasibility | step_correct
+  early_stop: true
+  reward_shaping: false
+  reward_shaping_weight: 0.1
+
+device: "auto"
+
+model:
+  type: "board_cnn"          # mlp | dueling | cnn | board_cnn
+  hidden_dim: 256
+  num_layers: 3
+
+agent:
+  type: "dqn"                # dqn | double_dqn | ppo
+  lr: 0.0005
+  batch_size: 128
+  buffer_size: 200000
+  min_buffer: 10000
+  target_update_freq: 2000
+  epsilon_start: 1.0
+  epsilon_end: 0.05
+  epsilon_decay: 10000
+  lql_weight: 0.2            # LQL 부등식 손실 가중치
+  lql_n_step: 3              # 비교할 미래 스텝 거리
+  use_per: true              # PER 활성화 여부
+  per_alpha: 0.6
+  per_beta: 0.4
+  train_freq: 1
+  gamma: 1.0
+  grad_clip: 10.0
+
+training:
+  num_episodes: 2000000
+  mode: "rl"                 # rl | towards | mixed
+  towards_ratio: 0.5
+  log_freq: 2000
+  seed: 42
+  exp_name: "board_dqn_10x10"
+  
+  # --- 역방향 커리큘럼 학습 (Reverse Curriculum) 탑재 ---
+  curriculum:
+    enabled: true
+    type: "adaptive"           # linear | cosine | adaptive
+    start_ratio: auto
+    end_ratio: 0.0
+    decay_episodes: 300000
+
+solver:
+  type: "board"              # line | board
+  neg_threshold: -0.5
+  max_outer_iters: 200
+
+experiment:
+  name: "board_dqn_10x10"

@@ -1,0 +1,34 @@
+# 10x10 2D Board PPO (Bipartite GNN 기반)
+env:
+  type: "board"              # line | board
+  N: 10
+  reward_type: "feasibility" # sparse | feasibility
+  early_stop: true
+  reward_shaping: true       # 2D 보드 상태 수렴을 돕는 보상 쉐이핑 탑재
+  reward_shaping_weight: 0.2
+
+device: "auto"
+
+model:
+  type: "board_gnn"          # 신규 이분 그래프 GNN 모델 지정
+  hidden_dim: 128            # GNN 노드/에지 피처 임베딩 차원
+  num_layers: 3              # GNN Message Passing Iteration Steps
+
+agent:
+  type: "ppo"
+  lr: 0.0003
+  batch_size: 128
+  buffer_size: 2048
+  train_epochs: 4
+  eps_clip: 0.2
+  gamma: 0.99
+  gae_lambda: 0.95
+  entropy_coef: 0.02
+  lql_weight: 0.2            # PPO Actor-Critic의 Critic에도 LQL 제약 적용
+  lql_n_step: 3
+  grad_clip: 5.0
+
+training:
+  num_episodes: 20000
+  seed: 42
+  log_freq: 50

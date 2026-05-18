@@ -1,0 +1,41 @@
+# 10x10 2D Board DQN (Bipartite GNN 기반)
+env:
+  type: "board"              # line | board
+  N: 10
+  reward_type: "feasibility" # sparse | feasibility
+  early_stop: true
+  reward_shaping: false      # GNN의 순수 이분 그래프 연산 능력을 검증하기 위해 꺼둠
+  reward_shaping_weight: 0.1
+
+device: "auto"
+
+model:
+  type: "board_gnn"          # 신규 이분 그래프 GNN 모델 지정
+  hidden_dim: 128            # GNN 노드/에지 피처 임베딩 차원
+  num_layers: 3              # GNN Message Passing Iteration Steps
+
+agent:
+  type: "dqn"
+  lr: 0.0005
+  batch_size: 128
+  buffer_size: 100000
+  min_buffer: 5000           # 빠른 디버깅과 학습 개시를 위해 5000 하향
+  target_update_freq: 2000
+  epsilon_start: 1.0
+  epsilon_end: 0.05
+  epsilon_decay: 50000
+  lql_weight: 0.2            # LQL 단조성 가치 제약 유지
+  lql_n_step: 3
+  use_per: true              # PER 활성화 여부
+  per_alpha: 0.6
+  per_beta: 0.4
+  train_freq: 1
+  gamma: 1.0
+  grad_clip: 10.0
+
+training:
+  num_episodes: 100000
+  mode: "rl"                 # rl | towards | mixed
+  towards_ratio: 0.5
+  log_freq: 100
+  seed: 42

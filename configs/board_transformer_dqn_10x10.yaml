@@ -1,0 +1,53 @@
+# 10x10 2D Board DQN (Axial Attention Transformer 기반)
+env:
+  type: "board"              # line | board
+  N: 10
+  reward_type: "feasibility" # sparse | feasibility
+  early_stop: true
+  reward_shaping: false
+  reward_shaping_weight: 0.1
+
+device: "auto"
+
+model:
+  type: "board_transformer"  # 신규 Axial-Attention Transformer 모델 지정
+  hidden_dim: 128            # 트랜스포머 임베딩 차원
+  num_heads: 4               # Axial Attention용 멀티헤드 수
+  num_layers: 3              # Transformer Blocks 횟수
+
+agent:
+  type: "dqn"
+  lr: 0.0003                 # 트랜스포머의 안정적인 학습을 위해 수렴 속도 하향 조율
+  batch_size: 128
+  buffer_size: 100000
+  min_buffer: 5000
+  target_update_freq: 2000
+  epsilon_start: 1.0
+  epsilon_end: 0.05
+  epsilon_decay: 10000
+  lql_weight: 0.2            # LQL 부등식 손실 가중치 탑재
+  lql_n_step: 3
+  train_freq: 4
+  gamma: 1.0
+  grad_clip: 5.0             # 트랜스포머 발산 방지를 위한 타이트한 grad clip
+  
+  # --- PER (Prioritized Experience Replay) 활성화 ---
+  use_per: true
+  per_alpha: 0.6
+  per_beta: 0.4
+  per_beta_increment: 0.001
+
+training:
+  num_episodes: 1000000
+  mode: "rl"                 # rl | towards | mixed
+  towards_ratio: 0.5
+  log_freq: 100
+  seed: 42
+  
+  # --- 역방향 커리큘럼 학습 (Reverse Curriculum) 탑재 ---
+  curriculum:
+    enabled: true
+    type: "adaptive"
+    start_ratio: auto         # 초반에 보드의 80%를 정답으로 채우고 기동!
+    end_ratio: 0.0           # 에피소드가 진행될수록 텅 빈 보드로 수렴
+    decay_episodes: 300000    # 25,000 에피소드 동안 천천히 보드를 비워 나감

@@ -1,0 +1,73 @@
+# ============================================================================
+# 기본 설정 (모든 config의 베이스)
+# 다른 config 파일에서 명시하지 않은 값은 이 파일의 기본값이 사용됨
+# ============================================================================
+
+env:
+  type: "line"               # line | board
+  N: 10                      # 보드 크기 (NxN)
+  early_stop: true           # feasibility 기반 조기 종료
+  reward_type: "feasibility" # sparse: terminal에서만 ±1 (towards 필수)
+                             # feasibility: hint 기반 dense reward (순수 RL 가능)
+                             # step_correct: 매 step ground truth 비교 (독립 분류화)
+
+model:
+  type: "mlp"                # mlp | dueling | cnn | board_cnn
+  hidden_dim: 128            # 은닉층 차원
+  num_layers: 3              # 은닉층 수
+
+agent:
+  type: "dqn"                # dqn | double_dqn | ppo
+  lr: 0.001                  # 학습률
+  batch_size: 128            # 미니배치 크기
+  buffer_size: 100000        # replay buffer 용량 (dqn, double_dqn 전용)
+  min_buffer: 2000           # 학습 시작 전 최소 buffer 크기
+  train_freq: 1              # 몇 step마다 gradient update
+  target_update_freq: 500    # target network hard-copy 주기
+  gamma: 1.0                 # 할인율
+  grad_clip: 10.0            # gradient clipping norm
+  epsilon_start: 1.0         # ε-greedy 초기 ε (dqn, double_dqn 전용)
+  epsilon_end: 0.05          # ε-greedy 최종 ε
+  epsilon_decay: 10000       # ε이 epsilon_end에 도달하는 step 수
+  # --- PPO 전용 ---
+  ppo_epochs: 4              # PPO 업데이트 시 epoch 수
+  ppo_clip: 0.2              # clipped surrogate 범위
+  entropy_coef: 0.01         # entropy bonus 계수
+  value_coef: 0.5            # value loss 계수
+  rollout_steps: 128         # rollout 길이
+  # LQL (arXiv:2605.05812)
+  lql_weight: 0.2            # LQL 부등식 손실 가중치
+  lql_n_step: 3              # 비교할 미래 스텝 거리
+  # --- PER (Prioritized Experience Replay) ---
+  use_per: false             # PER 활성화 여부 (dqn 계열 전용)
+  per_alpha: 0.6             # 우선순위 비중 제어
+  per_beta: 0.4              # 중요도 샘플링 가중치 시작값
+  per_beta_increment: 0.001  # beta의 스텝당 증분값
+  # --- Action Chunking (Q-chunking) ---
+  action_chunking: false     # Action Chunking 활성화 여부
+  chunk_size: 1              # Chunk size (한번에 연속 실행할 액션 개수)
+
+training:
+  num_episodes: 30000        # 학습 에피소드 수
+  mode: "rl"                 # rl: 순수 RL (에이전트 policy로만 탐색)
+                             # towards: 정답 기반 action만 사용 (expert demo)
+                             # mixed: rl + towards 혼합
+  towards_ratio: 0.5         # mixed 모드에서 towards 에피소드 비율
+  seed: 42                   # 랜덤 시드
+  log_freq: 500              # 로그 출력 간격 (에피소드 수)
+  curriculum:
+    enabled: false           # 역방향 커리큘럼 학습 활성화 여부 (2D Board 전용)
+    start_ratio: 0.8         # 초기 정답 공개 비율
+    end_ratio: 0.0           # 최종 정답 공개 비율
+    decay_episodes: 20000    # 공개 비율 감쇠 에피소드 수
+
+solver:
+  type: "line"               # line | board
+  neg_threshold: -0.5        # Q ≤ threshold이면 반대 값 적용
+  max_outer_iters: 200       # row↔col 교대 횟수 상한
+  max_forces: null           # force step 상한 (null → N*N)
+
+experiment:
+  name: "default"            # 실험 이름 → runs/{name}/
+
+device: "auto"               # auto | cpu | cuda | mps

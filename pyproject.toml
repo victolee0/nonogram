@@ -1,0 +1,31 @@
+[project]
+name = "nonogram"
+version = "0.1.0"
+description = "RL-based Nonogram (Picross) Solver"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "torch>=2.0",
+    "pyyaml>=6.0",
+    "ray>=2.0",
+    "tqdm>=4.0",
+]
+
+[project.optional-dependencies]
+parallel = ["ray>=2.0"]
+dev = ["pytest>=7.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch", marker = "sys_platform != 'darwin'" }
+]

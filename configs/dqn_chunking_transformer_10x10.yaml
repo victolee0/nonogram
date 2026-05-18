@@ -1,0 +1,63 @@
+# 10x10 2D Board DQN (Axial Attention Transformer 기반) + Action Chunking 적용
+env:
+  type: "board"              # 2D 보드 환경 사용
+  N: 10
+  reward_type: "sparse"      # Action Chunking의 효과를 확인하기 위해 순수 Sparse Reward 셋업
+  early_stop: true
+  reward_shaping: false
+  reward_shaping_weight: 0.0 # Reward Shaping 비활성화 (Chunking 탐색으로 보완)
+
+device: "auto"
+
+model:
+  type: "board_transformer"  # Axial-Attention Transformer 모델
+  hidden_dim: 128            # 트랜스포머 임베딩 차원
+  num_heads: 4               # 멀티헤드 수
+  num_layers: 3              # Transformer Blocks 수
+
+agent:
+  type: "dqn"
+  lr: 0.0003                 # Transformer의 안정적 학습을 위한 조율
+  batch_size: 128
+  buffer_size: 100000
+  min_buffer: 5000
+  target_update_freq: 2000
+  epsilon_start: 1.0
+  epsilon_end: 0.05
+  epsilon_decay: 10000
+  train_freq: 4
+  gamma: 1.0
+  grad_clip: 5.0             # 발산 방지를 위한 grad clip
+  
+  # --- Action Chunking (Q-chunking) 설정 ---
+  action_chunking: true      # 활성화
+  chunk_size: 5              # 1회 관측당 5칸의 Action Chunk 예측 및 실행
+  
+  # --- LQL 비활성화 (Action Chunking의 n-step 스킵과 충돌/중복을 피함) ---
+  lql_weight: 0.0
+  lql_n_step: 3
+  
+  # --- PER (Prioritized Experience Replay) 활성화 ---
+  use_per: true
+  per_alpha: 0.6
+  per_beta: 0.4
+  per_beta_increment: 0.001
+
+training:
+  num_episodes: 1000000
+  mode: "rl"                 # 순수 RL 탐색 (Action Chunking의 탐색 효율 평가)
+  towards_ratio: 0.0
+  log_freq: 100
+  seed: 42
+  exp_name: "dqn_chunking_transformer_10x10"
+  
+  # --- 역방향 커리큘럼 학습 (Reverse Curriculum) 탑재 ---
+  curriculum:
+    enabled: true
+    type: "adaptive"
+    start_ratio: auto         # 80% 이상의 정답을 채우고 기동
+    end_ratio: 0.0
+    decay_episodes: 300000
+
+experiment:
+  name: "dqn_chunking_transformer_10x10"

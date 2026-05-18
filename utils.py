@@ -17,8 +17,6 @@ Reward:
 """
 
 
-from functools import lru_cache
-
 import numpy as np
 import torch
 import torch.nn as nn
@@ -133,44 +131,42 @@ def apply_action(state, action_idx, N):
 # Feasibility check (used for early stopping during training)
 # ---------------------------------------------------------------------------
 
+from functools import lru_cache
+
+@lru_cache(maxsize=1000000)
+def _is_feasible_rec(B, H, N, i, h_idx, cur_len):
+    if i == N:
+        if cur_len > 0:
+            return h_idx == len(H) - 1 and cur_len == H[h_idx]
+        return h_idx == len(H)
+
+    cell = B[i]
+    options = (1, -1) if cell == 0 else (cell,)
+    for val in options:
+        if val == 1:
+            if h_idx >= len(H):
+                continue
+            if cur_len + 1 > H[h_idx]:
+                continue
+            if _is_feasible_rec(B, H, N, i + 1, h_idx, cur_len + 1):
+                return True
+        else:  # val == -1
+            if cur_len > 0:
+                if cur_len != H[h_idx]:
+                    continue
+                if _is_feasible_rec(B, H, N, i + 1, h_idx + 1, 0):
+                    return True
+            else:
+                if _is_feasible_rec(B, H, N, i + 1, h_idx, 0):
+                    return True
+    return False
+
 def is_feasible(blocks, hint_part, N):
     """Can the partially filled `blocks` still be completed to satisfy `hint_part`?
-
-    Empty cells (== 0) may be filled with either +1 or -1; already-decided cells
-    are fixed. Returns True iff at least one completion satisfies the hint.
     """
     H = tuple(int(h) for h in hint_part if int(h) > 0)
     B = tuple(int(b) for b in blocks)
-
-    @lru_cache(maxsize=None)
-    def rec(i, h_idx, cur_len):
-        if i == N:
-            if cur_len > 0:
-                return h_idx == len(H) - 1 and cur_len == H[h_idx]
-            return h_idx == len(H)
-
-        cell = B[i]
-        options = (1, -1) if cell == 0 else (cell,)
-        for val in options:
-            if val == 1:
-                if h_idx >= len(H):
-                    continue
-                if cur_len + 1 > H[h_idx]:
-                    continue
-                if rec(i + 1, h_idx, cur_len + 1):
-                    return True
-            else:  # val == -1
-                if cur_len > 0:
-                    if cur_len != H[h_idx]:
-                        continue
-                    if rec(i + 1, h_idx + 1, 0):
-                        return True
-                else:
-                    if rec(i + 1, h_idx, 0):
-                        return True
-        return False
-
-    return rec(0, 0, 0)
+    return _is_feasible_rec(B, H, N, 0, 0, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +189,7 @@ class QNetwork(nn.Module):
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, output_dim),
+            nn.Tanh()
         )
 
     def forward(self, x):

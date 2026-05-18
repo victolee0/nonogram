@@ -1,0 +1,50 @@
+# 10x10 Double DQN + Dueling Architecture
+env:
+  N: 10
+  reward_type: "feasibility" # sparse | feasibility | step_correct
+  early_stop: true
+  reward_shaping: false
+  reward_shaping_weight: 0.1
+
+device: "auto"
+
+model:
+  type: "dueling"            # mlp | dueling | cnn | board_cnn
+  hidden_dim: 256
+  num_layers: 3
+
+agent:
+  type: "double_dqn"         # dqn | double_dqn | ppo
+  lr: 0.0005
+  batch_size: 256
+  buffer_size: 200000
+  min_buffer: 5000
+  target_update_freq: 1000
+  train_freq: 1
+  gamma: 1.0
+  grad_clip: 10.0
+  epsilon_start: 1.0
+  epsilon_end: 0.02
+  epsilon_decay: 30000
+  # LQL (arXiv:2605.05812)
+  lql_weight: 0.2            # LQL 부등식 손실 가중치
+  lql_n_step: 3              # 비교할 미래 스텝 거리
+  use_per: true              # PER 활성화 여부
+  per_alpha: 0.6
+  per_beta: 0.4
+
+training:
+  num_episodes: 100000
+  mode: "rl"                 # rl | towards | mixed
+  towards_ratio: 0.5
+  log_freq: 1000
+  seed: 42
+  exp_name: "double_dqn_10x10"
+
+solver:
+  type: "line"
+  neg_threshold: -0.5
+  max_outer_iters: 200
+
+experiment:
+  name: "double_dqn_dueling_10x10"
