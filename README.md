@@ -65,6 +65,7 @@
 ├── scripts/                    # 모듈화된 최신 실행 스크립트
 │   ├── train.py                # 최신 모듈형 1D/2D 학습
 │   ├── evaluate.py             # 최신 모듈형 솔버 평가
+│   ├── evaluate_1d.py          # 최신 모듈형 1D Q-net 평가
 │   └── inference.py            # 최신 모듈형 1D 추론 시각화
 ├── runs/                       # 실험 결과 (실험별 하위 폴더)
 └── README.md
@@ -253,6 +254,9 @@ uv run train_alphazero.py --config configs/alphazero_2d.yaml --resume
 ```bash
 # 2D 보드 솔버 (LineSolver) 다수 퍼즐 평가
 uv run python scripts/evaluate.py --config configs/double_dqn_10x10.yaml --num_puzzles 200 --load_path ./runs/double_dqn_10x10_double_dqn_dueling_N10/checkpoints/latest.pt
+
+# 1D 줄(Line) 환경에서 1D Q-네트워크 자체의 성공률 및 성능 평가
+uv run python scripts/evaluate_1d.py --config configs/double_dqn_10x10.yaml --load_path ./runs/double_dqn_10x10_double_dqn_dueling_N10/checkpoints/best.pt --num_lines 1000
 
 # 1D 한 줄 풀이 과정의 단계별 Q-값 및 마스킹 추론 시각화
 uv run python scripts/inference.py --config configs/double_dqn_10x10.yaml --hint 1 2 3 --load_path ./runs/double_dqn_10x10_double_dqn_dueling_N10/checkpoints/latest.pt

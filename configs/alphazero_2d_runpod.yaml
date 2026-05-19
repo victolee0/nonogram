@@ -1,0 +1,46 @@
+env:
+  N: 10
+
+model:
+  type: "alphazero_2d"
+  hidden_dim: 256                # 10x10 보드 표현력 확보를 위한 임베딩 차원
+  num_heads: 8                   # 복잡한 2D 행/열 상관관계 추론을 위한 헤드 개수
+  num_layers: 4                  # Transformer Blocks 깊이
+
+agent:
+  num_simulations: 50            # MCTS 시뮬레이션 횟수 (탐색 정확도와 연산 시간의 밸런스 튜닝)
+  batch_size: 256                # RTX 4090 VRAM(24GB) 및 RAM 64GB를 고려한 배치 크기
+  buffer_size: 100000
+  min_buffer: 2000               # 빠른 학습 시작을 위한 버퍼 임계치
+  sync_freq: 5
+  lr: 0.0005                     # 안정적 수렴을 위한 학습률
+  weight_decay: 0.0001
+  num_workers: 10                # 12 vCPU 환경에 최적화 (10개 self-play 워커, 2개는 Learner 및 GPU 제어용)
+  episodes_per_task: 1           # 빠른 학습 주기 로그 확보를 위한 태스크당 에피소드 수
+  max_grad_updates_per_task: 20  # RTX 4090의 빠른 연산 속도를 활용해 그래디언트 업데이트 주기 확대
+  lql_weight: 0.3                # 논리적 가치 일관성(LQL) 학습 제약 가중치
+  lql_n_step: 5                  # 장기적 시간 지평 반영을 위한 LQL 스텝 수
+
+mcts:
+  c_puct: 3.0                    # 넓은 2N^2 액션 공간의 탐색 장려 계수
+  dirichlet_alpha: 0.15          # 액션 크기에 적합한 노이즈 집중도
+  dirichlet_epsilon: 0.25
+  temperature: 1.0
+  temp_threshold_ratio: 0.4      # 게임 초반 40% 이후부터는 Greedy 모드로 전환하여 탐색 속도 가속
+  action_masking: true           # Perfect Simulator를 활용한 infeasible 경로 가지치기 활성화
+
+training:
+  num_episodes: 50000
+  seed: 42
+  log_freq: 100
+  value_loss_weight: 0.5         # Policy vs Value loss 가중치 비율
+  lql_weight: 0.2
+  lql_n_step: 3
+  reward_shaping: true           # 달성도 만족 기반의 조밀한 보상(Dense reward)
+  pretrain_bc: true              # MCTS 기동 전 초기 가중치 안정을 위한 Behavior Cloning 사전학습 활성화
+  pretrain_episodes: 3000        # 사전 학습 궤적 수
+  pretrain_lr: 0.001             # BC 사전 학습 러닝레이트
+
+experiment:
+  save_path: "alphazero_N10_runpod.pt"
+  resume: false                  # 체크포인트 재개 시 true로 설정
