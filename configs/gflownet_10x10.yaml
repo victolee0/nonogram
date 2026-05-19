@@ -17,7 +17,8 @@ agent:
   batch_size: 64
   buffer_size: 2000
   epsilon: 0.0001
-  reward_temp: 1.0           # R = exp(reward_temp * satisfied_lines)
+  reward_temp: 5.0           # R = exp(reward_temp * (satisfied_lines / 2N)) -> 완벽한 보상 e^10
+  explore_epsilon: 0.1       # epsilon-greedy 무작위 탐색 비율
   pb_type: "empirical"       # uniform | empirical
   pb_epsilon: 0.1
   grad_clip: 10.0

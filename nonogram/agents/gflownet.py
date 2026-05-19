@@ -35,14 +35,14 @@ class GFlowNetAgent(BaseAgent):
         # Symmetry GNN 모델 또는 지정된 모델 생성
         self.model = create_model(config).to(self.device)
 
-        # 분배 함수 Z의 로그값 (log Z)
-        self.log_Z = nn.Parameter(torch.tensor(0.0, device=self.device))
+        # 분배 함수 Z의 로그값 (log Z) - 예상 log Reward 근처로 초기화
+        self.log_Z = nn.Parameter(torch.tensor(10.0, device=self.device))
 
-        # Optimizer에 모델 파라미터와 log Z를 함께 등록
-        self.optimizer = torch.optim.Adam(
-            list(self.model.parameters()) + [self.log_Z],
-            lr=self.agent_cfg["lr"]
-        )
+        # Optimizer 파라미터 그룹 분리 (log_Z는 더 빠르게 학습되도록 50배 높은 LR 설정)
+        self.optimizer = torch.optim.Adam([
+            {'params': self.model.parameters(), 'lr': self.agent_cfg["lr"]},
+            {'params': [self.log_Z], 'lr': self.agent_cfg["lr"] * 50.0}
+        ])
 
         # Trajectory Replay Buffer
         buffer_size = self.agent_cfg.get("buffer_size", 5000)
@@ -60,17 +60,24 @@ class GFlowNetAgent(BaseAgent):
         state_t = torch.tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
         mask_t = torch.tensor(mask, dtype=torch.float32, device=self.device).unsqueeze(0)
 
-        with torch.no_grad():
-            # 모델 출력 로짓: (1, N, 2^N)
-            logits = self.model(state_t, symmetrize=True)
-            logits_flat = logits.view(1, -1)
-            # 유효하지 않은 액션 마스킹 (-infinity)
-            logits_flat = logits_flat.masked_fill(mask_t == 0, -1e9)
-
-            if explore:
-                dist = torch.distributions.Categorical(logits=logits_flat)
-                action = dist.sample().item()
+        if explore:
+            # GFlowNet의 탐색 안정성을 위해 epsilon-greedy 무작위 탐색 주입
+            explore_eps = self.agent_cfg.get("explore_epsilon", 0.1)
+            if random.random() < explore_eps:
+                valid_indices = np.where(mask == 1.0)[0]
+                action = int(random.choice(valid_indices))
             else:
+                with torch.no_grad():
+                    logits = self.model(state_t, symmetrize=True)
+                    logits_flat = logits.view(1, -1)
+                    logits_flat = logits_flat.masked_fill(mask_t == 0, -1e9)
+                    dist = torch.distributions.Categorical(logits=logits_flat)
+                    action = dist.sample().item()
+        else:
+            with torch.no_grad():
+                logits = self.model(state_t, symmetrize=True)
+                logits_flat = logits.view(1, -1)
+                logits_flat = logits_flat.masked_fill(mask_t == 0, -1e9)
                 action = logits_flat.argmax(dim=-1).item()
 
         self._last_state = state.copy()

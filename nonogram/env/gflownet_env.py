@@ -126,7 +126,7 @@ class GFlowNetNonogramEnv:
         return True
 
     def compute_terminal_reward(self) -> float:
-        """Terminal 상태에서 Clue 만족 여부로 보상 계산."""
+        """Terminal 상태에서 Clue 만족 여부로 보상 계산 (정규화된 보상 스케일 적용)."""
         satisfied_lines = 0
         # 행 만족도 체크
         for i in range(self.N):
@@ -138,11 +138,12 @@ class GFlowNetNonogramEnv:
                 satisfied_lines += 1
 
         if satisfied_lines == 2 * self.N:
-            # 모든 힌트를 만족하는 정답 완성
-            return np.exp(self.reward_temp * satisfied_lines)
+            # 완벽한 정답일 때 높은 보상 보장
+            return np.exp(self.reward_temp * 2.0)
         else:
-            # 모순이 존재하거나 불완전한 상태
-            return self.epsilon
+            # 부분적으로 만족한 라인 비율에 따라 보상 차등 지급
+            ratio = satisfied_lines / (2.0 * self.N)
+            return np.exp(self.reward_temp * ratio)
 
     def get_valid_mask(self) -> np.ndarray:
         """유효 action mask (길이 N * 2^N).
