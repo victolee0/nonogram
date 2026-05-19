@@ -8,22 +8,22 @@ device: "auto"
 
 model:
   type: "symmetry_gnn"
-  hidden_dim: 128
-  num_layers: 3
+  hidden_dim: 256            # (수정) 128 -> 256: 10x10의 복잡한 행/열 교차 관계를 담기 위해 차원 확대
+  num_layers: 4              # (수정) 3 -> 4: 그래프 메시지 패싱 횟수 증가 (전역 정보 도달)
 
 agent:
   type: "gflownet"
-  lr: 0.001
-  batch_size: 64
-  buffer_size: 2000
+  lr: 0.0005                 # (수정) 0.001 -> 0.0005: 배치 사이즈가 커지고 탐색 공간이 넓어짐에 따라 안정적인 학습 유도
+  batch_size: 256            # (수정) 64 -> 256: Trajectory Balance(TB) Loss 계산 시 분산(Variance)을 줄이기 위해 필수
+  buffer_size: 100000        # (수정) 2000 -> 100000: 희소하게 발견된 '정답 Trajectory'가 버퍼에서 밀려나지(Catastrophic Forgetting) 않도록 대폭 확대
   epsilon: 0.0001
-  reward_temp: 5.0           # R = exp(reward_temp * (satisfied_lines / 2N)) -> 완벽한 보상 e^10
-  explore_epsilon: 0.1       # epsilon-greedy 무작위 탐색 비율
+  reward_temp: 10.0          # (수정) 5.0 -> 10.0: 어닐링의 최종 목표 온도를 높여 정답에 도달했을 때 확실한 피드백 부여
+  explore_epsilon: 0.15      # (수정) 무작위 탐색 비율을 살짝 높여 초반 다양한 상태 방문 유도
   pb_type: "empirical"       # uniform | empirical
   pb_epsilon: 0.1
   grad_clip: 10.0
 
 training:
-  num_episodes: 20000
+  num_episodes: 200000       # (수정) 20000 -> 200000: 10x10 공간을 탐색하기 위한 절대적인 시도 횟수 확보
   seed: 42
-  log_freq: 50
+  log_freq: 100              # (수정) 진행률 로그 출력 빈도 조절

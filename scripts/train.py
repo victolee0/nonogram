@@ -461,7 +461,15 @@ def train_gflownet(config: dict, device: torch.device):
 
     t_start = time.time()
 
+    temp_start = 1.0
+    temp_end = config["agent"].get("reward_temp", 5.0)
+
     for episode in range(training_cfg["num_episodes"]):
+        # 온도 선형 증가 스케줄링
+        progress = min(1.0, episode / (training_cfg["num_episodes"] * 0.8)) # 80% 시점에서 최대 온도 도달
+        current_temp = temp_start + progress * (temp_end - temp_start)
+        env.reward_temp = current_temp  # 환경에 현재 온도 업데이트
+
         state = env.reset()
         done = False
 
@@ -493,7 +501,10 @@ def train_gflownet(config: dict, device: torch.device):
         # Terminal Reward 기준 성공 여부 체크
         total_reward = reward
         reward_history.append(total_reward)
-        is_success = (total_reward > agent.epsilon)
+        
+        # 완벽 정답 보상 임계치 계산 (부동소수점 오차 고려)
+        perfect_reward_threshold = math.exp(env.reward_temp * 2.0) * 0.99
+        is_success = (total_reward >= perfect_reward_threshold)
         success_history.append(1.0 if is_success else 0.0)
 
         # 메트릭 기록
