@@ -17,3 +17,4 @@ from nonogram.env.state import (
 from nonogram.env.feasibility import is_feasible
 from nonogram.env.line_env import LineEnv
 from nonogram.env.board_env import BoardEnv
+from nonogram.env.gflownet_env import GFlowNetNonogramEnv

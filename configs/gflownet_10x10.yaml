@@ -1,0 +1,28 @@
+# 10x10 2D Board GFlowNet (Symmetry GNN 기반)
+env:
+  type: "board"
+  N: 10
+  early_stop: true           # Feasibility-based early stopping 활성화
+
+device: "auto"
+
+model:
+  type: "symmetry_gnn"
+  hidden_dim: 128
+  num_layers: 3
+
+agent:
+  type: "gflownet"
+  lr: 0.001
+  batch_size: 64
+  buffer_size: 2000
+  epsilon: 0.0001
+  reward_temp: 1.0           # R = exp(reward_temp * satisfied_lines)
+  pb_type: "empirical"       # uniform | empirical
+  pb_epsilon: 0.1
+  grad_clip: 10.0
+
+training:
+  num_episodes: 20000
+  seed: 42
+  log_freq: 50

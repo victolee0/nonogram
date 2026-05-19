@@ -423,6 +423,114 @@ def train_ppo(config: dict, device: torch.device):
     print(f"Best success rate: {best_success_rate:.3f}")
 
 
+def train_gflownet(config: dict, device: torch.device):
+    """GFlowNet Trajectory Balance 학습 루프."""
+    N = config["env"]["N"]
+    training_cfg = config["training"]
+
+    # GFlowNet용 환경 생성
+    from nonogram.env.gflownet_env import GFlowNetNonogramEnv
+    env = GFlowNetNonogramEnv(
+        N=N,
+        reward_temp=config["agent"].get("reward_temp", 1.0),
+        epsilon=config["agent"].get("epsilon", 1e-4),
+        early_stop=config["env"].get("early_stop", True),
+        pb_type=config["agent"].get("pb_type", "uniform"),
+        pb_epsilon=config["agent"].get("pb_epsilon", 0.1),
+    )
+
+    agent = create_agent(config, device=device)
+
+    exp_dir = get_experiment_dir(config)
+    save_config(config, exp_dir / "config.yaml")
+
+    # Tensorboard logger 설정
+    from torch.utils.tensorboard import SummaryWriter
+    writer = SummaryWriter(log_dir=str(exp_dir / "tb"))
+
+    reward_history = []
+    success_history = []
+    loss_history = []
+    log_Z_history = []
+    best_success_rate = 0.0
+
+    print(f"Training GFlowNet (N={N}) on {device}", flush=True)
+    print(f"Env: gflownet  |  early_stop: {env.early_stop}  |  pb_type: {env.pb_type}", flush=True)
+    print(f"Experiment: {exp_dir}", flush=True)
+    print(flush=True)
+
+    t_start = time.time()
+
+    for episode in range(training_cfg["num_episodes"]):
+        state = env.reset()
+        done = False
+
+        while not done:
+            mask = env.get_valid_mask()
+            a = agent.select_action(state, mask, explore=True)
+
+            if a is None:
+                break
+
+            next_state, reward, done = env.step(a)
+
+            # transition 저장
+            agent.store_transition(
+                state=state,
+                action=a,
+                reward=reward,
+                next_state=next_state,
+                done=done,
+                mask=mask
+            )
+            state = next_state
+
+        # GFlowNet 에이전트 가중치 업데이트
+        metrics = {}
+        if len(agent.buffer) >= agent.batch_size:
+            metrics = agent.update()
+
+        # Terminal Reward 기준 성공 여부 체크
+        total_reward = reward
+        reward_history.append(total_reward)
+        is_success = (total_reward > agent.epsilon)
+        success_history.append(1.0 if is_success else 0.0)
+
+        # 메트릭 기록
+        if metrics:
+            loss_history.append(metrics["loss"])
+            log_Z_history.append(metrics["log_Z"])
+            writer.add_scalar("Train/Loss", metrics["loss"], episode)
+            writer.add_scalar("Train/Log_Z", metrics["log_Z"], episode)
+
+        writer.add_scalar("Train/Reward", total_reward, episode)
+        writer.add_scalar("Train/SuccessRate", float(is_success), episode)
+
+        if (episode + 1) % training_cfg["log_freq"] == 0:
+            window = training_cfg["log_freq"]
+            avg_r = float(np.mean(reward_history[-window:]))
+            avg_s = float(np.mean(success_history[-window:]))
+            avg_loss = float(np.mean(loss_history[-window:])) if loss_history else 0.0
+            log_z_val = agent.log_Z.item()
+            elapsed = time.time() - t_start
+
+            print(f"[ep {episode+1:6d}/{training_cfg['num_episodes']}] "
+                  f"avg_reward={avg_r:.6f}  success_rate={avg_s:.3f}  "
+                  f"loss={avg_loss:.4f}  log_Z={log_z_val:.3f}  "
+                  f"buffer={len(agent.buffer)}  ({elapsed:.0f}s)", flush=True)
+
+            if avg_s > best_success_rate:
+                best_success_rate = avg_s
+                best_path = exp_dir / "checkpoints" / "best.pt"
+                agent.save(best_path)
+
+    save_path = exp_dir / "checkpoints" / "latest.pt"
+    agent.save(save_path)
+    print(f"\nModel saved to {save_path}")
+    print(f"Best success rate: {best_success_rate:.3f}")
+    writer.close()
+
+
 def main():
     parser = make_base_parser()
     known_args, remaining = parser.parse_known_args()
@@ -443,6 +551,8 @@ def main():
         train_dqn_family(config, device)
     elif agent_type == "ppo":
         train_ppo(config, device)
+    elif agent_type == "gflownet":
+        train_gflownet(config, device)
     else:
         raise ValueError(f"Unknown agent type: {agent_type}")
 

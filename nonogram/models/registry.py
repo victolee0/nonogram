@@ -40,5 +40,5 @@ def create_model(config: dict) -> nn.Module:
 
 
 # Import all model modules to trigger registration
-from nonogram.models import mlp, dueling, cnn, board_cnn, board_gnn, board_transformer, deep_crl  # noqa: E402, F401
+from nonogram.models import mlp, dueling, cnn, board_cnn, board_gnn, board_transformer, deep_crl, symmetry_gnn  # noqa: E402, F401
 

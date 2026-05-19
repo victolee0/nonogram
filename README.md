@@ -24,28 +24,32 @@
 │   ├── crl_her_10x10.yaml      # 10x10 2D Board HER 기반 Contrastive RL
 │   ├── crl_line_clue_10x10.yaml # 10x10 1D Line Clue 매칭 Contrastive RL
 │   ├── crl_line_her_10x10.yaml  # 10x10 1D Line HER 기반 Contrastive RL
-│   └── alphazero_2d.yaml       # AlphaZero 2D MCTS + Transformer
+│   ├── alphazero_2d.yaml       # AlphaZero 2D MCTS + Transformer
+│   └── gflownet_10x10.yaml     # 10x10 GFlowNet + Symmetry GNN (Trajectory Balance)
 ├── nonogram/                   # 메인 패키지
 │   ├── config.py               # Config 로딩 및 유효성 검증
 │   ├── env/                    # 환경 모듈
 │   │   ├── state.py            # State/Action 인코딩 및 유틸리티
 │   │   ├── line_env.py         # 1D 줄 환경
 │   │   ├── board_env.py        # 2D 보드 환경
-│   │   └── feasibility.py      # Feasibility check (early stopping)
+│   │   ├── feasibility.py      # Feasibility check (early stopping)
+│   │   └── gflownet_env.py     # GFlowNet용 생성적 MDP 환경
 │   ├── models/                 # Q-Network / Policy Network
 │   │   ├── registry.py         # 모델 레지스트리
 │   │   ├── mlp.py              # MLP (기존 QNetwork 호환)
 │   │   ├── dueling.py          # Dueling DQN (Shared, Advantage, Value)
 │   │   ├── cnn.py              # 1D CNN
 │   │   ├── board_cnn.py        # 2D Board CNN
-│   │   └── deep_crl.py         # 초심층 대비 학습 모델 (LayerScale, GroupNorm 탑재)
+│   │   ├── deep_crl.py         # 초심층 대비 학습 모델 (LayerScale, GroupNorm 탑재)
+│   │   └── symmetry_gnn.py     # Symmetry-Aware Bipartite GNN
 │   ├── agents/                 # RL 알고리즘
 │   │   ├── registry.py         # 에이전트 레지스트리
 │   │   ├── base.py             # 베이스 클래스 (LQL 손실 추가)
 │   │   ├── dqn.py              # 표준 DQN (LQL 적용)
 │   │   ├── double_dqn.py       # Double DQN (LQL 적용)
 │   │   ├── ppo.py              # PPO (LQL 적용)
-│   │   └── crl.py              # Contrastive RL 에이전트 (InfoNCE 대비 손실 적용)
+│   │   ├── crl.py              # Contrastive RL 에이전트 (InfoNCE 대비 손실 적용)
+│   │   └── gflownet.py         # GFlowNet 에이전트 (Trajectory Balance 목적 함수)
 │   ├── solvers/                # 2D 풀이 전략
 │   │   ├── registry.py         # 풀이기 레지스트리
 │   │   ├── line_solver.py      # 줄 교대 풀이 (DQN 기반 2D 풀이)
@@ -131,6 +135,13 @@ uv sync
 - **적용 대상**:
   - **2D Board**: `configs/crl_clue_10x10.yaml`, `configs/crl_her_10x10.yaml`로 훈련 가능.
   - **1D Line**: `configs/crl_line_clue_10x10.yaml`, `configs/crl_line_her_10x10.yaml`로 훈련 가능.
+
+### 7. Symmetry-Aware GFlowNets (Trajectory Balance) 기법 탑재 (ICML 2025)
+노노그램의 엄격한 논리적 제약과 높은 탐색 복잡도를 완화하기 위해, MCTS의 무거운 롤아웃 없이 상태 공간을 효율적으로 탐색하고 다양한 해를 샘플링하는 GFlowNet 구조를 도입하였습니다.
+- **GFlowNet MDP 재정의**: 빈 보드에서 시작하여 행(Row) 단위로 오토레그레시브하게 보드를 결정해 나가는 전이 MDP 설계.
+- **Symmetry-Aware Bipartite GNN**: 수평/수직 반전 및 전치(Transpose)에 대해 논리적 제약이 완전히 보존되는 $D_4$ 대칭군 특성을 GNN 파라미터 공유 및 레이어 설계에 주입하고, 정책 수준에서 $V_4$ 대칭 변환 로짓의 평균 연산을 수행하여 완벽한 동변성(Equivariance) 확보.
+- **Trajectory Balance (TB) 목적 함수**: 단일 해 수렴(Mode Collapse) 문제를 근본적으로 예방하고 다중 정답을 고르게 샘플링할 수 있도록 궤적 균형(TB) 손실 함수를 최적화 타겟으로 설정하고 분배 함수 $Z$를 학습.
+- **적용 대상**: `configs/gflownet_10x10.yaml`로 훈련 가능.
 
 ---
 
@@ -237,6 +248,9 @@ uv run python scripts/train.py --config configs/crl_line_clue_10x10.yaml
 
 # 10x10 1D Line HER 기반 대비 학습 (Contrastive RL)
 uv run python scripts/train.py --config configs/crl_line_her_10x10.yaml
+
+# 10x10 Symmetry-Aware GFlowNet (Trajectory Balance) 학습
+uv run python scripts/train.py --config configs/gflownet_10x10.yaml
 ```
 
 ### AlphaZero 2D 학습 (train_alphazero.py)
@@ -273,10 +287,10 @@ uv run python scripts/inference.py --config configs/double_dqn_10x10.yaml --hint
 | :--- | :--- | :--- | :--- |
 | `env.N` | Integer | NOT NULL, $\ge 5$ | 노노그램 보드 크기 ($N \times N$) |
 | `env.reward_type` | String | sparse \| feasibility \| step_correct | 에이전트의 보상 형태 |
-| `model.type` | String | mlp \| dueling \| cnn \| board_cnn \| deep_crl \| deep_line_crl | 가치/정책/대비 네트워크 구조 |
+| `model.type` | String | mlp \| dueling \| cnn \| board_cnn \| deep_crl \| deep_line_crl \| symmetry_gnn | 가치/정책/대비/GFlowNet 네트워크 구조 |
 | `model.num_layers` | Integer | $\ge 1$ | 초심층 대비 학습 모델 레이어 수 (ResNet 1D/2D 블록 수) |
 | `model.dropout` | Float | $0.0 \sim 1.0$ | 드롭아웃 확률 |
-| `agent.type` | String | dqn \| double_dqn \| ppo \| alphazero_2d \| crl | 강화학습 알고리즘 종류 |
+| `agent.type` | String | dqn \| double_dqn \| ppo \| alphazero_2d \| crl \| gflownet | 강화학습 알고리즘 종류 |
 | `agent.crl_mode` | String | clue \| her | 대비 학습 매칭 모드 (Clue 매칭 또는 HER 미래 상태 매칭) |
 | `agent.crl_temperature`| Float | $\ge 0.0$ | InfoNCE 분류 온도 하이퍼파라미터 (기본 0.1) |
 | `agent.lql_weight` | Float | $\ge 0.0$ | LQL 단조성 제약 손실 비중 |
@@ -328,6 +342,7 @@ uv run python scripts/inference.py --config configs/double_dqn_10x10.yaml --hint
 | Contrastive RL 2D 10x10 | `crl_clue_10x10.yaml` & `crl_her_10x10.yaml` | 초심층 ResNet2D + InfoNCE 학습 안정성 검증 완료 |
 | Contrastive RL 1D 10x10 | `crl_line_clue_10x10.yaml` & `crl_line_her_10x10.yaml` | 초심층 ResNet1D + InfoNCE 학습 안정성 검증 완료 |
 | AlphaZero 2D 10x10 | `alphazero_2d.yaml` | Axial-Attention + LQL 튜닝 및 학습 재개 |
+| GFlowNet 2D 10x10 | `gflownet_10x10.yaml` | Symmetry-Aware Bipartite GNN + Trajectory Balance 학습 파이프라인 검증 완료 |
 
 ---
 
