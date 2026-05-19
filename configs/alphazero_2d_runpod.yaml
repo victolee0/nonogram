@@ -15,7 +15,7 @@ agent:
   sync_freq: 5
   lr: 0.0005                     # 안정적 수렴을 위한 학습률
   weight_decay: 0.0001
-  num_workers: 10                # 12 vCPU 환경에 최적화 (10개 self-play 워커, 2개는 Learner 및 GPU 제어용)
+  num_workers: 26                # 28 vCPU 환경에 최적화 (26개 self-play 워커, 2개는 Learner 및 오버헤드용)
   episodes_per_task: 1           # 빠른 학습 주기 로그 확보를 위한 태스크당 에피소드 수
   max_grad_updates_per_task: 20  # RTX 4090의 빠른 연산 속도를 활용해 그래디언트 업데이트 주기 확대
   lql_weight: 0.3                # 논리적 가치 일관성(LQL) 학습 제약 가중치
