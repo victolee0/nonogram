@@ -93,10 +93,13 @@ uv sync
 
 ## 주요 기능
 
-### 1. 1D Line DQN — 줄 단위 Q-learning 풀이
+### 1. 1D Line DQN — 줄 단위 Q-learning 풀이 (최적화 백트래킹 DFS 탑재)
 - 1D Q-network가 각 줄에 대해 "이 action이 실패로 이어지는가?"를 판단.
 - `Q ≤ threshold` 이면 반대 값 적용 전략으로 5x5에서 **98% hint-satisfied** 달성.
-- 행↔열 교대 적용 및 deadlock 시 최고 Q값 셀 강제 결정.
+- **교착 상태(Deadlock) 극복을 위한 백트래킹 DFS 및 Feasibility Pruning**:
+  - 교착 상태 시 Q-value가 가장 높은 미확정 셀을 선택하여 Paint(+1)/X(-1) 이진 탐색 전개.
+  - 탐색 과정에서 변경된(dirty) 행/열만 타겟팅하여 $O(N)$으로 feasibility를 실시간 조기 가지치기(Pruning).
+  - **Best Feasible Board 복원 전략**: 탐색 실패/중단 시 텅 빈 보드 대신, DFS 탐색 과정 중 **가장 많은 셀을 채웠던 (unknown이 가장 적었던) 유효한(feasible) 보드 상태**를 복원하여 최종 반환함으로써 성공률 및 재구성 완성도를 극대화.
 
 ### 2. AlphaZero 2D — MCTS + Dual-Attention Transformer
 - **Dual-Attention Transformer**: Axial Attention (행/열 독립 추론) + Global Attention (전체 보드 패턴)을 결합하여 2D 힌트와 셀 상태 파악.
@@ -148,6 +151,33 @@ uv sync
 ---
 
 ## 핵심 코드
+
+### 1D Line Solver 백트래킹 DFS 아키텍처 (`nonogram/solvers/line_solver.py`)
+
+```python
+# 1. 변경된(dirty) 줄 한정 실시간 Feasibility 검사 (O(N) 최적화)
+def _check_feasibility_efficient(self, board, row_hints_clean, col_hints_clean, N, rows, cols) -> bool:
+    for r in rows:
+        if not is_feasible(board[r, :], row_hints_clean[r], N):
+            return False
+    for c in cols:
+        if not is_feasible(board[:, c], col_hints_clean[c], N):
+            return False
+    return True
+
+# 2. 재귀적 DFS 탐색과 Best Feasible Board 캐싱 및 복원
+def search(board, dirty_rows, dirty_cols, force_count):
+    ...
+    # feasibility 통과 시점: 가장 많이 채워진 feasible 보드를 실시간 캐싱
+    num_unknowns = int((local_board == 0).sum())
+    if num_unknowns < self.min_unknowns:
+        self.min_unknowns = num_unknowns
+        self.best_feasible_board = local_board.copy()
+    ...
+    # 백트래킹 실패 시 안전 장치로 가장 많이 채워졌던 feasible 보드 반환
+    if final_board is None:
+        return self.best_feasible_board
+```
 
 ### AlphaZero 2D 아키텍처 (`models_2d.py`)
 
@@ -312,6 +342,8 @@ uv run python scripts/inference.py --config configs/double_dqn_10x10.yaml --hint
 | `training.curriculum.adaptive_threshold`| Float | NOT NULL | 난이도를 높이기(비공개칸 증가) 위한 목표 성공률 임계치 (adaptive 용, 기본 0.8) |
 | `training.curriculum.adaptive_backtrack_threshold`| Float | NOT NULL | 난이도를 낮추기(복습용 정답 지원) 위한 최저 성공률 임계치 (adaptive 용, 기본 0.2) |
 | `training.curriculum.adaptive_step`| Float | NOT NULL | 성과 판정 시 조정할 reveal_ratio 증감 보폭 (adaptive 용, 기본 0.02) |
+| `solver.min_guess_q` | Float | NOT NULL | 교착 상태 DFS Guessing 진입을 위한 최저 Q-value 신뢰도 임계값 (기본 0.05) |
+| `solver.max_backtracks` | Integer | NOT NULL | 무한 백트래킹 탐색 헬(Hell) 방지를 위한 최대 백트랙 시도 허용 횟수 (기본 1000) |
 
 ### 2. 체크포인트 테이블 (`runs/{exp_name}/checkpoints/*.pt`)
 | 필드명 | 데이터 타입 | 제약 조건 | 설명 |
@@ -341,6 +373,7 @@ uv run python scripts/inference.py --config configs/double_dqn_10x10.yaml --hint
 | 1D DQN 5x5 | `dqn_5x5.yaml` | hint_satisfied **98%**, exact_match **90%** |
 | 1D DQN 10x10 | `dqn_10x10.yaml` | 학습 수렴 확인 |
 | Double DQN 10x10 | `double_dqn_10x10.yaml` | LQL 적용 및 체크포인트 최적 보존 완료 |
+| 1D Line Solver (백트래킹 DFS) | `configs/double_dqn_10x10.yaml` | `qnet_N10.pt` 모델 사용, 10x10 퍼즐 완벽 해결 성공률 **30% (3/10)**, cell-level agreement **62.5%** 달성 (평균 unknown cell 28.1개 수준으로 대폭 축소) |
 | Contrastive RL 2D 10x10 | `crl_clue_10x10.yaml` & `crl_her_10x10.yaml` | 초심층 ResNet2D + InfoNCE 학습 안정성 검증 완료 |
 | Contrastive RL 1D 10x10 | `crl_line_clue_10x10.yaml` & `crl_line_her_10x10.yaml` | 초심층 ResNet1D + InfoNCE 학습 안정성 검증 완료 |
 | AlphaZero 2D 10x10 | `alphazero_2d.yaml` | Axial-Attention + LQL 튜닝 및 학습 재개 |

@@ -33,6 +33,7 @@ from utils import (
     hint_length,
     idx_to_action,
 )
+from nonogram.solvers.line_solver import LineSolver
 
 
 # ===========================================================================
@@ -236,62 +237,16 @@ def force_one_cell(board, row_hints_padded, col_hints_padded,
 
 def solve(N, row_hints, col_hints, q_net, device, neg_threshold,
           max_outer_iters, verbose=False, max_forces=None):
-    board = np.zeros((N, N), dtype=np.int64)
-
-    row_hints_padded = [encode_hint(h, N) for h in row_hints]
-    col_hints_padded = [encode_hint(h, N) for h in col_hints]
-
-    dirty_rows = set(range(N))
-    dirty_cols = set(range(N))
-
-    if max_forces is None:
-        max_forces = N * N  # generous default: at most one force per cell
-
-    force_count = 0
-    outer = 0
-    while outer < max_outer_iters:
-        outer += 1
-        changed_row = process_pass('row', board, row_hints_padded,
-                                   dirty_rows, dirty_cols,
-                                   q_net, device, N, neg_threshold)
-        changed_col = process_pass('col', board, col_hints_padded,
-                                   dirty_cols, dirty_rows,
-                                   q_net, device, N, neg_threshold)
-        if verbose:
-            print(f"--- after outer pass {outer} "
-                  f"(row_changed={changed_row}, col_changed={changed_col}) ---")
-            print(render_board(board, row_hints, col_hints))
-            print()
-
-        if changed_row or changed_col:
-            continue  # normal progress -- keep going
-
-        # Deadlock: no -1 action was found on either axis this pass.
-        if (board != 0).all():
-            break  # board fully decided
-
-        if force_count >= max_forces:
-            if verbose:
-                print(f"(reached max_forces={max_forces}; stopping with "
-                      f"{(board == 0).sum()} unknown cells)")
-            break
-
-        forced = force_one_cell(board, row_hints_padded, col_hints_padded,
-                                dirty_rows, dirty_cols, q_net, device, N)
-        if not forced:
-            break  # truly nothing left to do
-        force_count += 1
-        if verbose:
-            axis = forced['axis']
-            print(f"*** forced guess #{force_count}: "
-                  f"{axis} {forced['line_idx']}, cell {forced['j']} = "
-                  f"{'+1' if forced['f'] == 1 else '-1'} "
-                  f"(Q = {forced['q']:+.4f}) ***")
-            print()
-
-    if verbose:
-        print(f"(stopped after {outer} outer pass(es), {force_count} forced guess(es))")
-    return board
+    config = {
+        "solver": {
+            "neg_threshold": neg_threshold,
+            "max_outer_iters": max_outer_iters,
+            "min_guess_q": 0.05,
+            "max_backtracks": max_forces if max_forces is not None else 1000,
+        }
+    }
+    solver = LineSolver(config=config, q_net=q_net, device=device)
+    return solver.solve(N=N, row_hints=row_hints, col_hints=col_hints, verbose=verbose)
 
 
 # ---------------------------------------------------------------------------
