@@ -79,6 +79,7 @@ def main():
     parser.add_argument("--show_failures", type=int, default=0)
     parser.add_argument("--log_every", type=int, default=20)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--verbose", action="store_true", help="상세 출력 모드 활성화 (각 퍼즐 풀이 과정 및 중간 진행 상황 출력)")
     parser.add_argument("--load_path", type=str, default=None,
                         help="체크포인트 경로. 없으면 실험 디렉터리에서 최신 모델 로드.")
     known_args, remaining = parser.parse_known_args()
@@ -159,7 +160,7 @@ def main():
         row_hints, col_hints = extract_hints_from_board(gt)
 
         t0 = time.time()
-        solver_board = solver.solve(N=N, row_hints=row_hints, col_hints=col_hints, verbose=True)
+        solver_board = solver.solve(N=N, row_hints=row_hints, col_hints=col_hints, verbose=known_args.verbose)
         solve_times.append(time.time() - t0)
 
         stats = evaluate_solution(solver_board, row_hints, col_hints, gt)
@@ -177,7 +178,7 @@ def main():
         if not stats["hint_satisfied"] and len(failures) < known_args.show_failures:
             failures.append((idx, gt.copy(), solver_board.copy(), row_hints, col_hints))
 
-        if idx % known_args.log_every == 0 or idx == known_args.num_puzzles:
+        if known_args.verbose and (idx % known_args.log_every == 0 or idx == known_args.num_puzzles):
             elapsed = time.time() - t_start
             print(f"[{idx:4d}/{known_args.num_puzzles}]  "
                   f"hint_ok={n_hint_ok/idx:.3f}  "

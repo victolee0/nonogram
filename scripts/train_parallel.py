@@ -70,6 +70,7 @@ class RolloutWorker:
             self.env = BoardEnv(
                 N=self.N,
                 early_stop=config["env"].get("early_stop", True),
+                reward_type=config["env"].get("reward_type", "feasibility"),
                 reward_shaping=config["env"].get("reward_shaping", False),
                 reward_shaping_weight=config["env"].get("reward_shaping_weight", 0.1),
             )
@@ -309,6 +310,7 @@ def main():
                 
             episodes_collected += len(ep_returns)
             total_steps_collected += ep_steps
+            learner_agent.step_count += ep_steps  # Epsilon decay 및 로깅용 step 수 동기화
             reward_history.extend(ep_returns)
             success_history.extend(ep_successes)
             
@@ -361,8 +363,9 @@ def main():
                     learner_agent.update()
                     gradient_steps += 1
                     
-                    if learner_agent.should_sync_target():
-                        learner_agent.sync_target()
+                    if hasattr(learner_agent, "sync_target"):
+                        if gradient_steps % learner_agent.agent_cfg.get("target_update_freq", 2000) == 0:
+                            learner_agent.sync_target()
                         
             # 로깅 및 체크포인트 보존
             if episodes_collected - last_log_ep >= training_cfg["log_freq"]:

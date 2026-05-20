@@ -1,0 +1,55 @@
+# 10x10 2D Board Q-network via Cross-Attention
+env:
+  type: "board"
+  N: 10
+  reward_type: "feasibility_dense_2d"  # 매 스텝 feasibility 유지 보상
+  early_stop: true
+  use_feasible_mask: false            # 순수 RL 추론 학습을 위해 마스크 비활성화
+
+device: "auto"
+
+model:
+  type: "board_cross_attn"
+  hidden_dim: 128
+  num_layers: 4
+  num_heads: 4
+
+agent:
+  type: "double_dqn"
+  lr: 0.0003
+  batch_size: 128
+  buffer_size: 500000
+  min_buffer: 10000
+  target_update_freq: 2000
+  epsilon_start: 1.0
+  epsilon_end: 0.05
+  epsilon_decay: 50000
+  gamma: 0.99
+  grad_clip: 10.0
+
+training:
+  num_episodes: 2000000
+  mode: "mixed"
+  towards_ratio: 0.3
+  log_freq: 2000
+  seed: 42
+  exp_name: "dqn_board_2d_rl"
+  
+  # --- 역방향 커리큘럼 학습 (Reverse Curriculum) ---
+  curriculum:
+    enabled: true
+    type: "adaptive"           # Cosine / Linear / Adaptive
+    start_ratio: "auto"        # (N*N - 1)/(N*N) -> 99%
+    end_ratio: 0.0
+    adaptive_window: 100
+    adaptive_threshold: 0.8
+    adaptive_backtrack_threshold: 0.2
+    adaptive_step: 0.02
+
+solver:
+  type: "board"
+  neg_threshold: -0.5
+  max_backtracks: 1000
+
+experiment:
+  name: "dqn_board_2d_rl"

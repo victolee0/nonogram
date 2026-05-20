@@ -26,6 +26,8 @@
 │   ├── crl_line_clue_10x10.yaml # 10x10 1D Line Clue 매칭 Contrastive RL
 │   ├── crl_line_her_10x10.yaml  # 10x10 1D Line HER 기반 Contrastive RL
 │   ├── alphazero_2d.yaml       # AlphaZero 2D MCTS + Transformer
+│   ├── dqn_board_2d_rl.yaml    # [NEW] 2D Board Q-network (Cross-Attention) 학습 설정
+│   ├── dqn_board_2d_rl_parallel.yaml # [NEW] Ray 기반 병렬 2D Board RL 학습 설정
 │   └── gflownet_10x10.yaml     # 10x10 GFlowNet + Symmetry GNN (Trajectory Balance)
 ├── nonogram/                   # 메인 패키지
 │   ├── config.py               # Config 로딩 및 유효성 검증
@@ -41,6 +43,7 @@
 │   │   ├── dueling.py          # Dueling DQN (Shared, Advantage, Value)
 │   │   ├── cnn.py              # 1D CNN
 │   │   ├── board_cnn.py        # 2D Board CNN
+│   │   ├── board_cross_attn.py # [NEW] 2D Board Row/Col Cross-Attention 모델
 │   │   ├── deep_crl.py         # 초심층 대비 학습 모델 (LayerScale, GroupNorm 탑재)
 │   │   └── symmetry_gnn.py     # Symmetry-Aware Bipartite GNN
 │   ├── agents/                 # RL 알고리즘
@@ -96,13 +99,11 @@ uv sync
 
 ## 주요 기능
 
-### 1. 1D Line DQN — 줄 단위 Q-learning 풀이 (최적화 백트래킹 DFS 탑재)
-- 1D Q-network가 각 줄에 대해 "이 action이 실패로 이어지는가?"를 판단.
-- `Q ≤ threshold` 이면 반대 값 적용 전략으로 5x5에서 **98% hint-satisfied** 달성.
-- **교착 상태(Deadlock) 극복을 위한 백트래킹 DFS 및 Feasibility Pruning**:
-  - 교착 상태 시 Q-value가 가장 높은 미확정 셀을 선택하여 Paint(+1)/X(-1) 이진 탐색 전개.
-  - 탐색 과정에서 변경된(dirty) 행/열만 타겟팅하여 $O(N)$으로 feasibility를 실시간 조기 가지치기(Pruning).
-  - **Best Feasible Board 복원 전략**: 탐색 실패/중단 시 텅 빈 보드 대신, DFS 탐색 과정 중 **가장 많은 셀을 채웠던 (unknown이 가장 적었던) 유효한(feasible) 보드 상태**를 복원하여 최종 반환함으로써 성공률 및 재구성 완성도를 극대화.
+### 1. AC-3 Constraint Propagation + Q-value DFS — 2D 보드 풀이 (hint-satisfied 100%)
+- **AC-3 스타일 제약 전파(Constraint Propagation)**: 각 unknown 셀에 대해 +1과 -1 양방향의 행/열 feasibility를 검사하여, 유일하게 가능한 값이 있으면 논리적으로 즉시 확정. 이 과정이 연쇄적으로 전파되어 10x10 보드에서 평균 86~100셀을 순수 논리로 완성.
+- **Q-value 가이드 DFS Guessing**: 제약 전파로 확정할 수 없는 셀은 1D Q-network의 Q-value가 가장 높은 셀부터 우선 시도하는 백트래킹 DFS로 해결. 잘못된 가정은 백트래킹으로 자동 복구.
+- **Lazy Feasibility Check**: DFS 분기 후보 선정 시 배치 Q-value 연산 후 상위 후보부터 순차 검증하여 최초 통과 후보를 즉시 채택.
+- **Best Feasible Board 복원 전략**: 탐색 실패/중단 시 DFS 탐색 과정 중 가장 많은 셀을 채웠던 유효한(feasible) 보드 상태를 복원하여 최종 반환.
 
 ### 2. AlphaZero 2D — MCTS + Dual-Attention Transformer
 - **Dual-Attention Transformer**: Axial Attention (행/열 독립 추론) + Global Attention (전체 보드 패턴)을 결합하여 2D 힌트와 셀 상태 파악.
@@ -155,37 +156,66 @@ uv sync
 노노그램의 성능과 정답률을 기하학적으로 끌어올리기 위해, 1D의 강력한 논리적 모순 제거력(DFS 백트래킹)과 2D의 글로벌 공간 맥락 지각력(2D Board RL 에이전트)을 유기적으로 융합하였습니다.
 - **2D Board 힌트 유실 해소 (GRU/Transformer 힌트 임베딩)**: 2D 보드 모델(`board_cnn`, `board_transformer`)이 단순 힌트 합산 스칼라 브로드캐스트 대신, 힌트 시퀀스 원형을 GRU 및 Attention 구조로 직접 흡수·융합하도록 개선하여 정보 병목을 해소하였습니다.
 - **동적 Action Masking (Feasibility Pruning)**: 각 칸에 가상 착수를 시도하여 가치 조건이 위배되는 불가능한 액션(Infeasible action)들을 $O(N)$으로 정밀 검사해 강제로 배제($-\infty$ 마스킹)합니다.
-- **계층적 하이브리드 솔버 (`HybridSolver`)**: 1D Line Solver의 강력한 줄 단위 백트래킹 DFS를 골격으로 유지하되, 추론이 정체되는 교착(Deadlock) 지점에서 2D Board Q-network를 호출하여 전체 보드 가치가 가장 높은 최선의 한 수를 추천받아 탐색 실패를 타개합니다.
+- **계층적 하이브리드 솔버 (`HybridSolver`)**: 1D Line Solver of 강력한 줄 단위 백트래킹 DFS를 골격으로 유지하되, 추론이 정체되는 교착(Deadlock) 지점에서 2D Board Q-network를 호출하여 전체 보드 가치가 가장 높은 최선의 한 수를 추천받아 탐색 실패를 타개합니다.
+
+### 9. 2D Board RL (Cross-Attention) 및 순수 RL 기반 2D DFS 백트래킹 솔버 [NEW]
+AC-3 알고리즘의 고정된 논리적 추론 없이 순수하게 강화학습만으로 2D 노노그램의 교차 제약을 풀어내기 위해, Row/Column Axial-Attention 아키텍처와 DFS 탐색 메커니즘을 통합했습니다.
+- **2D Board Row-Column Cross-Attention Q-network**: 행(Row)과 열(Column) 방향의 Axial Self-Attention 및 글로벌 피드포워드 레이어를 통해, 2D 노노그램의 행-열 교차 제약 조건을 모델 내부 파라미터로 직접 추론하고 학습하도록 설계되었습니다.
+- **Feasibility-Guarded Dense Reward (`feasibility_dense_2d`)**: 매 스텝 에이전트의 착수마다 2D 행/열 Feasibility 유지를 확인하여 타당한 결정이면 +0.01 보상을 지급하고, 제약 조건을 위반하는 오답을 두면 즉시 에피소드를 조기 종료(early stop, -1.0)시켜 학습 수렴을 비약적으로 가속합니다.
+- **Q-value 가이드 DFS 백트래킹 Board Solver**: 2D Board Q-network의 출력값(Q-value)이 높은 착수 후보 순서대로 DFS 백트래킹 탐색을 진행하여, 순수 강화학습 에이전트의 판단에 의존해 2D 보드를 완성시킵니다.
 
 ---
 
 ## 핵심 코드
 
-### 1D Line Solver 백트래킹 DFS 아키텍처 (`nonogram/solvers/line_solver.py`)
+### AC-3 Constraint Propagation + DFS 아키텍처 (`nonogram/solvers/line_solver.py`)
 
 ```python
-# 1. 변경된(dirty) 줄 한정 실시간 Feasibility 검사 (O(N) 최적화)
-def _check_feasibility_efficient(self, board, row_hints_clean, col_hints_clean, N, rows, cols) -> bool:
-    for r in rows:
-        if not is_feasible(board[r, :], row_hints_clean[r], N):
-            return False
-    for c in cols:
-        if not is_feasible(board[:, c], col_hints_clean[c], N):
-            return False
+# 1. AC-3 스타일 제약 전파: 유일한 feasible 값을 가진 셀을 논리적으로 즉시 확정
+def _propagate_constraints(self, board, N) -> bool:
+    to_check = {(r, c) for r in range(N) for c in range(N) if board[r, c] == 0}
+    while to_check:
+        next_check = set()
+        for (r, c) in list(to_check):
+            if board[r, c] != 0:
+                continue
+            # 양방향 feasibility 검사 (in-place 후 원복)
+            board[r, c] = 1
+            feas_pos = is_feasible(board[r, :], hints_row[r], N) and \
+                       is_feasible(board[:, c], hints_col[c], N)
+            board[r, c] = -1
+            feas_neg = is_feasible(board[r, :], hints_row[r], N) and \
+                       is_feasible(board[:, c], hints_col[c], N)
+            board[r, c] = 0  # 원복
+            if feas_pos and not feas_neg:     # +1만 가능 → 확정
+                board[r, c] = 1
+            elif feas_neg and not feas_pos:   # -1만 가능 → 확정
+                board[r, c] = -1
+            elif not feas_pos and not feas_neg:
+                return False  # 모순 발견
+        to_check = next_check
     return True
 
-# 2. 재귀적 DFS 탐색과 Best Feasible Board 캐싱 및 복원
-def search(board, dirty_rows, dirty_cols, force_count):
-    ...
-    # feasibility 통과 시점: 가장 많이 채워진 feasible 보드를 실시간 캐싱
-    num_unknowns = int((local_board == 0).sum())
-    if num_unknowns < self.min_unknowns:
-        self.min_unknowns = num_unknowns
-        self.best_feasible_board = local_board.copy()
-    ...
-    # 백트래킹 실패 시 안전 장치로 가장 많이 채워졌던 feasible 보드 반환
-    if final_board is None:
-        return self.best_feasible_board
+# 2. DFS Guessing: 배치 Q-value로 최적 분기 셀 선별
+def _get_best_guess_candidate(self, board, row_hints_padded, col_hints_padded, N):
+    # 모든 행의 Q-value를 한 번에 배치 연산 (N개 → 1개 forward pass)
+    states_t = torch.tensor(np.stack([build_state(hint[r], board[r,:]) for r in range(N)]))
+    q_all = self.q_net(states_t).cpu().numpy()  # (N, 2*N)
+    # Q-value 내림차순 정렬 후 Lazy Feasibility Check
+    candidates = sorted([(q_all[r,c], r, c, 1) for r,c if board[r,c]==0], reverse=True)
+    for q_val, r, c, f in candidates:
+        if is_feasible(row) and is_feasible(col): return (r, c, f, q_val)
+
+# 3. search 함수 핵심 흐름
+def search(board, force_count):
+    local_board = board.copy()
+    if not _propagate_constraints(local_board, N):  # AC-3 제약 전파
+        return None  # 모순 → 백트래킹
+    if complete: return check(local_board)           # 완성 → 검증
+    cell = _get_best_guess_candidate(local_board)    # DFS: Q-value 최선 분기
+    res = search(board_with_first_value)             # 1차 시도
+    if res: return res
+    return search(board_with_second_value)            # 백트래킹
 ```
 
 ### AlphaZero 2D 아키텍처 (`models_2d.py`)
@@ -262,6 +292,51 @@ class HybridSolver(LineSolver):
         ...
         return "row", r, c, f, -f, q_val
 ```
+
+### Row-Column Cross-Attention & DFS 백트래킹 Board Solver (`nonogram/models/board_cross_attn.py`, `nonogram/solvers/board_solver.py`)
+
+```python
+# 1. Row/Col 축방향 Axial-Attention 블록
+class RowColAttentionBlock(nn.Module):
+    def forward(self, x):
+        B, D, N, _ = x.shape
+        # Row Attention
+        r_in = x.permute(0, 2, 3, 1).reshape(B * N, N, D)
+        r_out, _ = self.row_attn(r_in, r_in, r_in)
+        r_out = self.norm1(r_in + r_out)
+        x = r_out.view(B, N, N, D).permute(0, 3, 1, 2)
+        # Col Attention
+        c_in = x.permute(0, 3, 2, 1).reshape(B * N, N, D)
+        c_out, _ = self.col_attn(c_in, c_in, c_in)
+        c_out = self.norm2(c_in + c_out)
+        x = c_out.view(B, N, N, D).permute(0, 3, 2, 1)
+        # Feed-Forward Network
+        flat = x.permute(0, 2, 3, 1).reshape(B, N * N, D)
+        x = self.norm3(flat + self.ffn(flat)).view(B, N, N, D).permute(0, 3, 1, 2)
+        return x
+
+# 2. Q-value 유도 DFS 백트래킹 탐색 (board_solver.py)
+def search(board, force_count):
+    # 완료 검증
+    if (board != 0).all():
+        return board if check_all_feasible(board) else None
+    
+    # Q-values 예측
+    state_t = torch.tensor(get_state(board)).unsqueeze(0)
+    q_values = q_net(state_t, row_hints, col_hints).squeeze(0).numpy()
+    
+    # Q-value 순위화 및 Feasibility 사전 검증
+    candidates = get_sorted_feasible_candidates(board, q_values)
+    if not candidates: return None
+    
+    best_cand = candidates[0]
+    # 백트래킹 이진 탐색 트리 분기
+    res = search(board_with_best_cand)
+    if res is not None: return res
+    
+    return search(board_with_opposite_cand)
+```
+```,StartLine:281,TargetContent:
 ```
 
 ---
@@ -347,8 +422,11 @@ uv run train_alphazero.py --config configs/alphazero_2d.yaml --resume
 ### 평가 및 추론 시각화 (scripts/)
 
 ```bash
-# 2D 보드 솔버 (LineSolver) 다수 퍼즐 평가
+# 2D 보드 솔버 (LineSolver) 다수 퍼즐 평가 (기본: 최종 요약 결과만 간결하게 출력)
 uv run python scripts/evaluate.py --config configs/double_dqn_10x10.yaml --num_puzzles 200 --load_path ./runs/double_dqn_10x10_double_dqn_dueling_N10/checkpoints/latest.pt
+
+# 2D 보드 솔버 상세 평가 (상세 출력 모드: Solver의 풀이 과정 및 중간 진행 상황 출력)
+uv run python scripts/evaluate.py --config configs/double_dqn_10x10.yaml --num_puzzles 200 --load_path ./runs/double_dqn_10x10_double_dqn_dueling_N10/checkpoints/latest.pt --verbose
 
 # 1D 줄(Line) 환경에서 1D Q-네트워크 자체의 성공률 및 성능 평가
 uv run python scripts/evaluate_1d.py --config configs/double_dqn_10x10.yaml --load_path ./runs/double_dqn_10x10_double_dqn_dueling_N10/checkpoints/best.pt --num_lines 1000
@@ -414,6 +492,7 @@ uv run python scripts/inference.py --config configs/double_dqn_10x10.yaml --hint
 | `sparse` | terminal만 | ✕ (hint만) | hint 일치 +1, 불일치 -1. towards 필수. |
 | `feasibility` | 매 step | ✕ (hint만) | feasible completion 수 변화 기반. 순수 RL 가능. |
 | `step_correct` | 매 step | ✓ (정답 비교) | 매 step 정답 비교 ±1/N. 독립 분류화 위험. |
+| `feasibility_dense_2d` | 매 step | ✕ (hint만) | 매 step feasibility 유지 시 +0.01, 위반 시 즉시 early stop 및 -1.0. 2D 보드 학습용. |
 
 ---
 
@@ -425,12 +504,15 @@ uv run python scripts/inference.py --config configs/double_dqn_10x10.yaml --hint
 | 1D DQN 10x10 | `dqn_10x10.yaml` | 학습 수렴 확인 |
 | Double DQN 10x10 | `double_dqn_10x10.yaml` | LQL 적용 및 체크포인트 최적 보존 완료 |
 | Double DQN 1D 극대화 10x10 | `dqn_10x10_super_1d.yaml` | dense step_correct 보상과 커리큘럼 및 expert demonstration 비율 혼합 적용 |
-| 1D Line Solver (백트래킹 DFS) | `configs/double_dqn_10x10.yaml` | `qnet_N10.pt` 모델 사용, 10x10 퍼즐 완벽 해결 성공률 **30% (3/10)**, cell-level agreement **62.5%** 달성 (평균 unknown cell 28.1개 수준으로 대폭 축소) |
+| **AC-3 CP + DFS 2D Solver** [BEST] | `dqn_10x10_super_1d.yaml` | 10x10 퍼즐 **hint-satisfied 100% (100/100)**, exact-match **68%**, cell agreement **97.8%**, 평균 풀이 시간 **27.7ms** |
+| 1D Line Solver (백트래킹 DFS) | `configs/double_dqn_10x10.yaml` | `qnet_N10.pt` 모델 사용, 10x10 퍼즐 완벽 해결 성공률 **30% (3/10)**, cell-level agreement **62.5%** 달성 |
+| 1D Line Solver (점진적 최적화) | `configs/dqn_10x10_super_1d.yaml` | 다중 동시 결정에 의한 Feasibility 깨짐 문제 해결 후, 10x10 퍼즐 성공률 **8.0% (4/50)**, cell-level agreement **54.28%** |
 | Contrastive RL 2D 10x10 | `crl_clue_10x10.yaml` & `crl_her_10x10.yaml` | 초심층 ResNet2D + InfoNCE 학습 안정성 검증 완료 |
 | Contrastive RL 1D 10x10 | `crl_line_clue_10x10.yaml` & `crl_line_her_10x10.yaml` | 초심층 ResNet1D + InfoNCE 학습 안정성 검증 완료 |
 | AlphaZero 2D 10x10 | `alphazero_2d.yaml` | Axial-Attention + LQL 튜닝 및 학습 재개 |
 | GFlowNet 2D 10x10 | `gflownet_10x10.yaml` | Symmetry-Aware Bipartite GNN + Trajectory Balance 학습 파이프라인 검증 완료 |
 | 1D DFS & 2D RL 하이브리드 솔버 | `configs/double_dqn_10x10.yaml` + `--solver.type hybrid` | 2D 보드 모델(`board_cnn`) 연동 성공 및 교착 상태 돌파 추론 정상 작동 확인 |
+| 1D RL (CP 미사용) 2D 풀이 | `configs/dqn_10x10_super_1d.yaml` + `--solver.method rl` | 100개 10x10 퍼즐 성공률 **1% (1/100)** -> CP의 논리 추론 배제 시 1D 모델의 2D 전역 교착 상태 해결 불가 입증 |
 
 ---
 

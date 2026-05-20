@@ -48,3 +48,10 @@ training:
   # 커리큘럼 비활성화: 초반부터 빈 라인(reveal_ratio=0)을 학습하여 즉각적인 검증 성능 향상
   curriculum:
     enabled: false
+
+solver:
+  type: "line"
+  neg_threshold: -0.5
+  max_outer_iters: 200
+  method: "rl"
+

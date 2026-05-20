@@ -58,6 +58,8 @@ class BaseAgent(ABC):
 
     def get_epsilon(self) -> float:
         """현재 ε 값 (ε-greedy 탐색용)."""
+        if hasattr(self, "epsilon") and self.epsilon is not None:
+            return self.epsilon
         eps_start = self.agent_cfg.get("epsilon_start", 1.0)
         eps_end = self.agent_cfg.get("epsilon_end", 0.05)
         eps_decay = self.agent_cfg.get("epsilon_decay", 10_000)

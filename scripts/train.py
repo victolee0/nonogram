@@ -47,6 +47,7 @@ def train_dqn_family(config: dict, device: torch.device):
         env = BoardEnv(
             N=N,
             early_stop=config["env"].get("early_stop", True),
+            reward_type=config["env"].get("reward_type", "feasibility"),
             reward_shaping=config["env"].get("reward_shaping", False),
             reward_shaping_weight=config["env"].get("reward_shaping_weight", 0.1),
         )
@@ -310,6 +311,7 @@ def train_ppo(config: dict, device: torch.device):
         env = BoardEnv(
             N=N,
             early_stop=config["env"].get("early_stop", True),
+            reward_type=config["env"].get("reward_type", "feasibility"),
             reward_shaping=config["env"].get("reward_shaping", False),
             reward_shaping_weight=config["env"].get("reward_shaping_weight", 0.1),
         )

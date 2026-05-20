@@ -29,10 +29,12 @@ class BoardEnv:
     """
 
     def __init__(self, N: int, early_stop: bool = True,
+                 reward_type: str = "feasibility",
                  reward_shaping: bool = False, reward_shaping_weight: float = 0.1):
         self.N = N
         self.k = hint_length(N)
         self.early_stop = early_stop
+        self.reward_type = reward_type
         self.reward_shaping = reward_shaping
         self.reward_shaping_weight = reward_shaping_weight
 
@@ -122,14 +124,27 @@ class BoardEnv:
 
         self.board[row, col] = fill_value
 
-        # Terminal check
+        # 1. Feasibility check (early stop)
+        row_ok = self.is_line_feasible(self.board[row, :], self.row_hints[row])
+        col_ok = False
+        if row_ok:
+            col_ok = self.is_line_feasible(self.board[:, col], self.col_hints[col])
+        feasible = row_ok and col_ok
+
+        if self.early_stop and not feasible:
+            return self.get_state(), -1.0, True
+
+        # 2. Terminal check
         if np.all(self.board != 0):
             reward = self._compute_terminal_reward()
             return self.get_state(), reward, True
 
-        # Reward shaping
+        # 3. Intermediate Reward
         reward = 0.0
-        if self.reward_shaping and self.gt_board is not None:
+        if self.reward_type == "feasibility_dense_2d":
+            # 여기까지 살아남았다면 (early stop되지 않았다면) 합법적이고 타당한 수이므로 보상 부여
+            reward = 0.01
+        elif self.reward_shaping and self.gt_board is not None:
             if self.board[row, col] == self.gt_board[row, col]:
                 reward = self.reward_shaping_weight * (1.0 / (self.N * self.N))
             else:

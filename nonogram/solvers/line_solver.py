@@ -40,8 +40,9 @@ class LineSolver:
         max_outer_iters = self.solver_cfg["max_outer_iters"]
         
         # 최적화용 추가 하이퍼파라미터
-        min_guess_q = self.solver_cfg.get("min_guess_q", 0.2)
+        min_guess_q = self.solver_cfg.get("min_guess_q", 0.0)
         max_backtracks = self.solver_cfg.get("max_backtracks", 1000)
+        method = self.solver_cfg.get("method", "cp")  # "cp" | "rl"
 
         # 힌트 인코딩 및 정제 (0 패딩 제외한 실제 힌트 배열 추출)
         row_hints_padded = [encode_hint(h, N) for h in row_hints]
@@ -49,6 +50,9 @@ class LineSolver:
 
         row_hints_clean = [[int(x) for x in h if int(x) > 0] for h in row_hints]
         col_hints_clean = [[int(x) for x in h if int(x) > 0] for h in col_hints]
+
+        self.row_hints_clean = row_hints_clean
+        self.col_hints_clean = col_hints_clean
 
         initial_board = np.zeros((N, N), dtype=np.int64)
 
@@ -71,100 +75,103 @@ class LineSolver:
             local_dirty_rows = set(dirty_rows)
             local_dirty_cols = set(dirty_cols)
 
-            outer = 0
-            while outer < max_outer_iters:
-                outer += 1
-                
-                # pass 진행 전, 변경 대상 보관
-                rows_to_check = set(local_dirty_rows)
-                cols_to_check = set(local_dirty_cols)
-
-                changed_row = self._process_pass(
-                    "row", local_board, row_hints_padded, local_dirty_rows, local_dirty_cols, N, neg_threshold
-                )
-                changed_col = self._process_pass(
-                    "col", local_board, col_hints_padded, local_dirty_cols, local_dirty_rows, N, neg_threshold
-                )
-
-                rows_to_check.update(local_dirty_rows)
-                cols_to_check.update(local_dirty_cols)
-
-                # 1. 최적화된 Feasibility 검사: 변경된 줄만 feasibility 검사 수행하여 O(N)으로 최적화
-                if not self._check_feasibility_efficient(local_board, row_hints_clean, col_hints_clean, N, rows_to_check, cols_to_check):
+            # === 풀이 방법 분기 ===
+            if method == "cp":
+                # --- CP 모드: AC-3 Constraint Propagation (순수 논리) ---
+                prop_result = self._propagate_constraints(local_board, N)
+                if not prop_result:
                     self.backtrack_count += 1
                     return None
+            else:
+                # --- RL 모드: Q-value Deduction (순수 RL) ---
+                # 1D Q-network의 배제 추론을 반복 실행.
+                # 각 배제마다 per-cell feasibility guard가 보호.
+                outer = 0
+                while outer < max_outer_iters:
+                    outer += 1
 
-                # feasibility 통과 시점: 가장 많이 채워진 feasible 보드를 업데이트
-                num_unknowns = int((local_board == 0).sum())
-                if num_unknowns < self.min_unknowns:
-                    self.min_unknowns = num_unknowns
-                    self.best_feasible_board = local_board.copy()
+                    rows_to_check = set(local_dirty_rows)
+                    cols_to_check = set(local_dirty_cols)
 
-                if not (changed_row or changed_col):
-                    break
+                    changed_row = self._process_pass(
+                        "row", local_board, row_hints_padded,
+                        local_dirty_rows, local_dirty_cols, N, neg_threshold
+                    )
+                    changed_col = self._process_pass(
+                        "col", local_board, col_hints_padded,
+                        local_dirty_cols, local_dirty_rows, N, neg_threshold
+                    )
 
-            # 2. 종료 조건 검사
+                    rows_to_check.update(local_dirty_rows)
+                    cols_to_check.update(local_dirty_cols)
+
+                    # 변경된 줄만 feasibility 검사
+                    if not self._check_feasibility_efficient(
+                        local_board, row_hints_clean, col_hints_clean, N,
+                        rows_to_check, cols_to_check
+                    ):
+                        self.backtrack_count += 1
+                        return None
+
+                    if not (changed_row or changed_col):
+                        break
+
+            # feasibility 통과 시점: 가장 많이 채워진 feasible 보드를 업데이트
+            num_unknowns = int((local_board == 0).sum())
+            if num_unknowns < self.min_unknowns:
+                self.min_unknowns = num_unknowns
+                self.best_feasible_board = local_board.copy()
+
+            # === 종료 조건 검사 ===
             if (local_board != 0).all():
-                # 최종 힌트 만족 여부 정교 검증
                 if self._check_final_match(local_board, row_hints_clean, col_hints_clean, N):
                     return local_board
                 else:
                     self.backtrack_count += 1
                     return None
 
-            # 3. 교착 상태 (Deadlock) → 분기 탐색 (DFS Guessing)
+            # === 교착 상태 (Deadlock) → Greedy DFS Guessing (Q-value argmax 기반, 백트래킹 가능) ===
             guess_cand = self._get_best_guess_candidate(
                 local_board, row_hints_padded, col_hints_padded, N
             )
             if guess_cand is None:
                 return None
 
-            axis, line_idx, j, first_val, second_val, q_val = guess_cand
+            axis, best_r, best_c, first_val, second_val, second_feasible, q_val = guess_cand
 
-            # 신뢰도가 임계치보다 낮으면 탐색 헬(Backtracking Hell)에 들어가지 않고, 
-            # 현재까지의 확실한 보드 상태(local_board)를 최종 결과로 반환해 안전 장치 확보
             if q_val < min_guess_q:
                 if verbose:
                     print(f"[DFS Level {force_count}] Guessing aborted. Best Q ({q_val:+.4f}) < threshold ({min_guess_q})")
                 return local_board
 
             if verbose:
-                print(f"[DFS Level {force_count}] Guessing: {axis} {line_idx}, cell {j} = {first_val} (Q={q_val:+.4f})")
+                print(f"[DFS Level {force_count}] Guessing: cell ({best_r}, {best_c}) = {first_val} (Q={q_val:+.4f})")
 
-            # 첫 번째 값 가정 탐색
+            # 첫 번째 값 가정 탐색 (이미 feasibility가 보장됨)
             next_board = local_board.copy()
-            if axis == "row":
-                next_board[line_idx, j] = first_val
-                next_dirty_rows = {line_idx}
-                next_dirty_cols = {j}
-            else:
-                next_board[j, line_idx] = first_val
-                next_dirty_rows = {j}
-                next_dirty_cols = {line_idx}
+            next_board[best_r, best_c] = first_val
 
-            res = search(next_board, next_dirty_rows, next_dirty_cols, force_count + 1)
+            res = search(next_board, set(range(N)), set(range(N)), force_count + 1)
             if res is not None:
                 return res
 
             if self.aborted:
                 return None
 
-            # 첫 번째 가정이 실패하면, 두 번째 값(반대 값)으로 백트래킹 탐색
-            if verbose:
-                print(f"[DFS Level {force_count}] Backtracking! Trying: {axis} {line_idx}, cell {j} = {second_val}")
+            # 두 번째 값(반대 값)이 feasible한 경우에만 안전하게 백트래킹 탐색
+            if second_feasible:
+                if verbose:
+                    print(f"[DFS Level {force_count}] Backtracking! Trying: cell ({best_r}, {best_c}) = {second_val}")
 
-            next_board2 = local_board.copy()
-            if axis == "row":
-                next_board2[line_idx, j] = second_val
-                next_dirty_rows = {line_idx}
-                next_dirty_cols = {j}
+                next_board2 = local_board.copy()
+                next_board2[best_r, best_c] = second_val
+
+                res2 = search(next_board2, set(range(N)), set(range(N)), force_count + 1)
+                return res2
             else:
-                next_board2[j, line_idx] = second_val
-                next_dirty_rows = {j}
-                next_dirty_cols = {line_idx}
-
-            res2 = search(next_board2, next_dirty_rows, next_dirty_cols, force_count + 1)
-            return res2
+                if verbose:
+                    print(f"[DFS Level {force_count}] Backtracking skipped. Opposite value {second_val} is infeasible.")
+                return None
 
         # 최초 탐색 시작
         final_board = search(initial_board, set(range(N)), set(range(N)), 0)
@@ -173,7 +180,6 @@ class LineSolver:
             print(f"(Search finished. Calls: {self.search_calls}, Backtracks: {self.backtrack_count}, Aborted: {self.aborted})")
 
         if final_board is None:
-            # 백트래킹 실패 시 안전 장치로 가장 많이 채워졌던 feasible 보드 반환
             return self.best_feasible_board
 
         return final_board
@@ -214,6 +220,7 @@ class LineSolver:
         pending = sorted(dirty_self)
         dirty_self.clear()
 
+        # 1. 안전장치 탑재 Deduction (배제) 단계
         while pending:
             lines = [self._get_line(board, axis, i) for i in pending]
             states = np.stack([
@@ -233,11 +240,25 @@ class LineSolver:
                 bad_actions = np.where((mask > 0) & (q <= neg_threshold))[0]
 
                 line_changed = False
-                for action_idx in bad_actions:
-                    j, f = idx_to_action(int(action_idx), N)
-                    if self._set_cell(board, axis, line_idx, j, -f, dirty_other):
-                        line_changed = True
-                        changed_globally = True
+                if len(bad_actions) > 0:
+                    # Q-value가 가장 낮은 (배제 신뢰도가 가장 강력한) 단 1개의 행동만 선별
+                    best_bad_action = min(bad_actions, key=lambda a: q[a])
+                    j, f = idx_to_action(int(best_bad_action), N)
+                    
+                    if axis == "row":
+                        r, c = line_idx, j
+                    else:
+                        r, c = j, line_idx
+                        
+                    temp_board = board.copy()
+                    temp_board[r, c] = -f
+                    
+                    # 2D feasibility 검증
+                    if is_feasible(temp_board[r, :], self.row_hints_clean[r], N) and \
+                       is_feasible(temp_board[:, c], self.col_hints_clean[c], N):
+                        if self._set_cell(board, axis, line_idx, j, -f, dirty_other):
+                            line_changed = True
+                            changed_globally = True
 
                 if line_changed:
                     new_line = self._get_line(board, axis, line_idx)
@@ -246,6 +267,8 @@ class LineSolver:
 
             pending = next_pending
 
+        # Greedy Step 제거 — DFS Guessing 단계에서 Q-value argmax로
+        # 백트래킹 가능하게 처리하여 2D 교차 모순 해결
         return changed_globally
 
     def _check_feasibility_efficient(self, board, row_hints_clean, col_hints_clean, N, rows, cols) -> bool:
@@ -268,42 +291,116 @@ class LineSolver:
                 return False
         return True
 
-    def _get_best_guess_candidate(self, board, row_hints_padded, col_hints_padded, N):
-        """교착 상태 시, Q-value가 가장 높은 최적의 이진 분기 후보 셀을 선별."""
-        candidates = []
-        for r in range(N):
-            if not np.all(board[r, :] != 0):
-                candidates.append(("row", r))
-        for c in range(N):
-            if not np.all(board[:, c] != 0):
-                candidates.append(("col", c))
-        if not candidates:
-            return None
+    def _propagate_constraints(self, board, N) -> bool:
+        """AC-3 스타일 제약 전파: 각 unknown 셀에 대해 유일한 feasible 값이 존재하면 즉시 확정.
 
+        양방향(+1, -1) feasibility를 모두 검사하여:
+        - 하나만 가능 → 논리적으로 확정 (백트래킹 불필요)
+        - 둘 다 불가능 → 모순 발견 (False 반환)
+        - 둘 다 가능 → 아직 확정 불가 (DFS Guessing에서 처리)
+        """
+        to_check = set()
+        for r in range(N):
+            for c in range(N):
+                if board[r, c] == 0:
+                    to_check.add((r, c))
+
+        while to_check:
+            next_check = set()
+            for (r, c) in list(to_check):
+                if board[r, c] != 0:
+                    continue
+
+                # 값 +1 가능 여부 (in-place 검사 후 원복)
+                board[r, c] = 1
+                feas_pos = is_feasible(board[r, :], self.row_hints_clean[r], N) and \
+                           is_feasible(board[:, c], self.col_hints_clean[c], N)
+
+                # 값 -1 가능 여부
+                board[r, c] = -1
+                feas_neg = is_feasible(board[r, :], self.row_hints_clean[r], N) and \
+                           is_feasible(board[:, c], self.col_hints_clean[c], N)
+
+                # 원복
+                board[r, c] = 0
+
+                if feas_pos and not feas_neg:
+                    board[r, c] = 1
+                    # 같은 행/열의 다른 unknown 셀을 재검사 대상에 추가
+                    for j in range(N):
+                        if board[r, j] == 0 and j != c:
+                            next_check.add((r, j))
+                        if board[j, c] == 0 and j != r:
+                            next_check.add((j, c))
+                elif feas_neg and not feas_pos:
+                    board[r, c] = -1
+                    for j in range(N):
+                        if board[r, j] == 0 and j != c:
+                            next_check.add((r, j))
+                        if board[j, c] == 0 and j != r:
+                            next_check.add((j, c))
+                elif not feas_pos and not feas_neg:
+                    return False  # 모순 발견: 어떤 값도 불가능
+                # else: 양쪽 다 feasible → 아직 확정 불가
+
+            to_check = next_check
+
+        return True
+
+    def _get_best_guess_candidate(self, board, row_hints_padded, col_hints_padded, N):
+        """배치 Q-value 연산 + Lazy Feasibility Check로 최적의 분기 셀 선별.
+
+        모든 행의 Q-value를 한 번에 배치 연산하고, Q-value 내림차순으로
+        feasibility를 순차 검증하여 최초 통과 후보를 즉시 채택합니다.
+        """
+        # 1. 모든 행에 대한 Q-value 배치 연산 (N개 forward pass → 1개 배치)
         states = []
-        for axis, idx in candidates:
-            line = self._get_line(board, axis, idx)
-            hint = row_hints_padded[idx] if axis == "row" else col_hints_padded[idx]
-            states.append(self._build_state(hint, line))
+        for r in range(N):
+            line = self._get_line(board, "row", r)
+            hint = row_hints_padded[r]
+            state = self._build_state(hint, line)
+            states.append(state)
 
         states_t = torch.tensor(np.stack(states), dtype=torch.float32, device=self.device)
         with torch.no_grad():
-            q_all = self.q_net(states_t).cpu().numpy()
+            q_all = self.q_net(states_t).cpu().numpy()  # shape: (N, 2*N)
 
-        best = (-np.inf, None)
-        for cand_idx, (axis, idx) in enumerate(candidates):
-            line = self._get_line(board, axis, idx)
-            mask = self._valid_mask_from_line(line, N)
-            q = q_all[cand_idx].copy()
-            q[mask == 0] = -np.inf
-            a = int(np.argmax(q))
-            if q[a] > best[0]:
-                best = (float(q[a]), (cand_idx, a))
+        # 2. 모든 unknown 셀의 양방향 Q-value 수집
+        candidates = []
+        for r in range(N):
+            for c in range(N):
+                if board[r, c] == 0:
+                    candidates.append((q_all[r, c], r, c, 1))       # fill (+1)
+                    candidates.append((q_all[r, N + c], r, c, -1))  # empty (-1)
 
-        if best[1] is None:
+        if not candidates:
             return None
 
-        q_val, (cand_idx, action_idx) = best
-        axis, line_idx = candidates[cand_idx]
-        j, f = idx_to_action(action_idx, N)
-        return axis, line_idx, j, f, -f, q_val
+        # 3. Q-value 기준 내림차순 정렬
+        candidates.sort(key=lambda x: x[0], reverse=True)
+
+        # 4. Lazy Feasibility Check: 상위 후보부터 최초 통과 후보 즉시 채택
+        best_cand = None
+        for q_val, r, c, f in candidates:
+            board[r, c] = f
+            row_feas = is_feasible(board[r, :], self.row_hints_clean[r], N)
+            col_feas = is_feasible(board[:, c], self.col_hints_clean[c], N) if row_feas else False
+            board[r, c] = 0  # 원복
+
+            if row_feas and col_feas:
+                best_cand = (q_val, r, c, f)
+                break
+
+        if best_cand is None:
+            return None
+
+        best_q_val, best_r, best_c, best_f = best_cand
+
+        # 5. 반대 값(second_val)도 feasible한지 검증
+        second_f = -best_f
+        board[best_r, best_c] = second_f
+        second_feasible = is_feasible(board[best_r, :], self.row_hints_clean[best_r], N) and \
+                          is_feasible(board[:, best_c], self.col_hints_clean[best_c], N)
+        board[best_r, best_c] = 0  # 원복
+
+        return "row", best_r, best_c, best_f, second_f, second_feasible, best_q_val
