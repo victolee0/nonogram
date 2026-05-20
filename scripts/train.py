@@ -143,19 +143,24 @@ def train_dqn_family(config: dict, device: torch.device):
         
         # Action Chunking 사용 여부 판단 (Towards 모드가 아닐 때만 사용)
         use_chunking = getattr(agent, "action_chunking", False) and not use_towards
-
         while not done:
-            mask = env.get_valid_mask()
+            use_feasible_mask = config["env"].get("use_feasible_mask", False)
+            if use_feasible_mask and hasattr(env, "get_feasible_action_mask"):
+                mask = env.get_feasible_action_mask()
+            else:
+                mask = env.get_valid_mask()
 
             # Action 선택
             if use_towards:
                 a = env.select_towards_action()
                 actions_chunk = [a] if a is not None else []
             else:
+                row_hints = getattr(env, "row_hints", None)
+                col_hints = getattr(env, "col_hints", None)
                 if use_chunking:
-                    actions_chunk = agent.select_action_chunk(state, mask, explore=True)
+                    actions_chunk = agent.select_action_chunk(state, mask, explore=True, row_hints=row_hints, col_hints=col_hints)
                 else:
-                    a = agent.select_action(state, mask, explore=True)
+                    a = agent.select_action(state, mask, explore=True, row_hints=row_hints, col_hints=col_hints)
                     actions_chunk = [a]
 
             if not actions_chunk:
@@ -355,14 +360,20 @@ def train_ppo(config: dict, device: torch.device):
         done = False
 
         while not done:
-            mask = env.get_valid_mask()
-            a = agent.select_action(state, mask, explore=True)
+            use_feasible_mask = config["env"].get("use_feasible_mask", False)
+            if use_feasible_mask and hasattr(env, "get_feasible_action_mask"):
+                mask = env.get_feasible_action_mask()
+            else:
+                mask = env.get_valid_mask()
+            row_hints = getattr(env, "row_hints", None)
+            col_hints = getattr(env, "col_hints", None)
+            a = agent.select_action(state, mask, explore=True, row_hints=row_hints, col_hints=col_hints)
 
             if a is None:
                 break
 
             next_state, reward, done = env.step(a)
-            agent.store_transition(state, a, reward, next_state, done, mask)
+            agent.store_transition(state, a, reward, next_state, done, mask, row_hints=row_hints, col_hints=col_hints)
             state = next_state
             total_reward += reward
             agent.step_count += 1

@@ -10,6 +10,7 @@ import torch.nn as nn
 
 from nonogram.models.registry import register_model
 from models_2d import NonogramTransformerBlock
+from nonogram.env.state import hint_length
 
 
 @register_model("board_transformer")
@@ -29,6 +30,15 @@ class BoardTransformerQNetwork(nn.Module):
         self.state_proj = nn.Linear(5, hidden_dim)
         self.proj_norm = nn.LayerNorm(hidden_dim)
 
+        # 힌트 인코더용 Embedding & GRU
+        self.hint_dim = hidden_dim
+        self.hint_emb = nn.Embedding(N + 1, self.hint_dim, padding_idx=0)
+        self.hint_rnn = nn.GRU(self.hint_dim, self.hint_dim, batch_first=True)
+
+        # 상태 피처 + Row 힌트 피처 + Col 힌트 피처 융합용 투영 레이어
+        self.input_proj = nn.Linear(3 * hidden_dim, hidden_dim)
+        self.input_norm = nn.LayerNorm(hidden_dim)
+
         # Axial & Global Attention Transformer 스택
         self.blocks = nn.ModuleList([
             NonogramTransformerBlock(hidden_dim, num_heads, dropout=0.1)
@@ -42,7 +52,7 @@ class BoardTransformerQNetwork(nn.Module):
             nn.Linear(hidden_dim, 2),
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, row_hints=None, col_hints=None) -> torch.Tensor:
         """
         x: (B, 5, N, N) 입력 텐서
         """
@@ -55,6 +65,36 @@ class BoardTransformerQNetwork(nn.Module):
         x_emb = self.state_proj(x_permuted)
         x_emb = self.proj_norm(x_emb)
 
+        # 힌트 텐서가 누락된 경우(레거시/1D 호환용) zero-padding 처리
+        if row_hints is None or col_hints is None:
+            max_len = hint_length(N)
+            row_hints = torch.zeros((B, N, max_len), dtype=torch.long, device=x.device)
+            col_hints = torch.zeros((B, N, max_len), dtype=torch.long, device=x.device)
+        
+        # row_hints, col_hints가 list 등의 형식인 경우 텐서 변환
+        if not isinstance(row_hints, torch.Tensor):
+            row_hints = torch.tensor(row_hints, dtype=torch.long, device=x.device)
+        if not isinstance(col_hints, torch.Tensor):
+            col_hints = torch.tensor(col_hints, dtype=torch.long, device=x.device)
+
+        # Process Row Hints: (B, N, max_len) -> (B * N, max_len)
+        r_hints_flat = row_hints.view(B * self.N, -1)
+        r_emb = self.hint_emb(r_hints_flat)
+        _, r_hidden = self.hint_rnn(r_emb)
+        row_features = r_hidden.squeeze(0).view(B, self.N, 1, self.hint_dim)
+        row_features = row_features.expand(-1, -1, self.N, -1)  # (B, N, N, hidden_dim)
+
+        # Process Column Hints: (B, N, max_len) -> (B * N, max_len)
+        c_hints_flat = col_hints.view(B * self.N, -1)
+        c_emb = self.hint_emb(c_hints_flat)
+        _, c_hidden = self.hint_rnn(c_emb)
+        col_features = c_hidden.squeeze(0).view(B, 1, self.N, self.hint_dim)
+        col_features = col_features.expand(-1, self.N, -1, -1)  # (B, N, N, hidden_dim)
+
+        # Combine all features for Axial & Global Attention Transformer
+        combined = torch.cat([x_emb, row_features, col_features], dim=-1)  # (B, N, N, 3*hidden_dim)
+        x_emb = self.input_norm(self.input_proj(combined))  # (B, N, N, hidden_dim)
+
         # 3. Axial 및 Global Attention Transformer 순방향 연산
         for block in self.blocks:
             x_emb = block(x_emb)
@@ -66,3 +106,4 @@ class BoardTransformerQNetwork(nn.Module):
         # (B, N, N, 2) -> (B, 2, N, N) -> (B, 2*N*N)
         q_out = q_out.permute(0, 3, 1, 2)
         return q_out.reshape(B, -1)
+

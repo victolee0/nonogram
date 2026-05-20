@@ -17,7 +17,22 @@ import torch.optim as optim
 from nonogram.agents.base import BaseAgent
 from nonogram.agents.registry import register_agent
 from nonogram.models.registry import create_model
-from nonogram.env.state import valid_actions_mask
+from nonogram.env.state import valid_actions_mask, hint_length
+
+
+def pad_hints_batch(hints_list, k, N):
+    """배치 안의 다양한 길이의 단서 리스트를 (B, N, k) 텐서 크기로 제로 패딩."""
+    B = len(hints_list)
+    padded_batch = np.zeros((B, N, k), dtype=np.int64)
+    for b in range(B):
+        if hints_list[b] is None:
+            continue
+        for i in range(N):
+            actual = [int(x) for x in hints_list[b][i] if int(x) > 0]
+            pad_len = k - len(actual)
+            padded_batch[b, i, pad_len:] = actual
+    return padded_batch
+
 
 
 class PrioritizedReplayBuffer:
@@ -119,7 +134,7 @@ class DQNAgent(BaseAgent):
             self.buffer = deque(maxlen=self.agent_cfg["buffer_size"])
 
     def select_action(self, state: np.ndarray, mask: np.ndarray,
-                      explore: bool = True) -> int:
+                      explore: bool = True, row_hints: list | None = None, col_hints: list | None = None) -> int:
         """ε-greedy action 선택."""
         if explore and random.random() < self.get_epsilon():
             valid = np.where(mask > 0)[0]
@@ -129,14 +144,24 @@ class DQNAgent(BaseAgent):
 
         with torch.no_grad():
             state_t = torch.tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
-            q_values = self.q_net(state_t).squeeze(0).cpu().numpy()
+            model_type = self.config["model"]["type"]
+            is_2d_board_model = model_type in ("board_cnn", "board_transformer")
+            
+            if is_2d_board_model and row_hints is not None and col_hints is not None:
+                N = self.config["env"]["N"]
+                k = hint_length(N)
+                padded_rh = torch.tensor(pad_hints_batch([row_hints], k, N), dtype=torch.long, device=self.device)
+                padded_ch = torch.tensor(pad_hints_batch([col_hints], k, N), dtype=torch.long, device=self.device)
+                q_values = self.q_net(state_t, padded_rh, padded_ch).squeeze(0).cpu().numpy()
+            else:
+                q_values = self.q_net(state_t).squeeze(0).cpu().numpy()
 
         # 무효 action 마스킹
         q_values = np.where(mask > 0, q_values, -np.inf)
         return int(np.argmax(q_values))
 
     def select_action_chunk(self, state: np.ndarray, mask: np.ndarray,
-                            explore: bool = True) -> list[int]:
+                            explore: bool = True, row_hints: list | None = None, col_hints: list | None = None) -> list[int]:
         """ε-greedy 기반으로 한번에 여러 개의 (non-conflicting) action chunk 선택."""
         N = self.config["env"]["N"]
         N2 = N * N
@@ -160,7 +185,16 @@ class DQNAgent(BaseAgent):
 
         with torch.no_grad():
             state_t = torch.tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
-            q_values = self.q_net(state_t).squeeze(0).cpu().numpy()
+            model_type = self.config["model"]["type"]
+            is_2d_board_model = model_type in ("board_cnn", "board_transformer")
+            
+            if is_2d_board_model and row_hints is not None and col_hints is not None:
+                k = hint_length(N)
+                padded_rh = torch.tensor(pad_hints_batch([row_hints], k, N), dtype=torch.long, device=self.device)
+                padded_ch = torch.tensor(pad_hints_batch([col_hints], k, N), dtype=torch.long, device=self.device)
+                q_values = self.q_net(state_t, padded_rh, padded_ch).squeeze(0).cpu().numpy()
+            else:
+                q_values = self.q_net(state_t).squeeze(0).cpu().numpy()
 
         # 무효 action 마스킹
         q_values = np.where(mask > 0, q_values, -np.inf)
@@ -186,12 +220,12 @@ class DQNAgent(BaseAgent):
         chunk = [int(act) for q, act in cell_best_action[:self.chunk_size] if q != -np.inf]
         return chunk
 
-    def store_transition(self, state, action, reward, next_state, done, future_state=None):
+    def store_transition(self, state, action, reward, next_state, done, future_state=None, row_hints=None, col_hints=None):
         """Replay buffer에 transition 저장."""
         # future_state가 없으면 (에피소드 끝자락) next_state를 사용
         f_state = future_state.copy() if future_state is not None else next_state.copy()
         transition = (
-            state.copy(), action, reward, next_state.copy(), float(done), f_state
+            state.copy(), action, reward, next_state.copy(), float(done), f_state, row_hints, col_hints
         )
         if self.use_per:
             # 초기 우선순위는 현재 버퍼의 최고 우선순위로 주어 한 번도 학습하지 않은 데이터 우선순위 부여
@@ -235,7 +269,7 @@ class DQNAgent(BaseAgent):
                     batch_size=self.agent_cfg["batch_size"],
                     beta=self.per_beta
                 )
-                states, actions, rewards, next_states, dones, future_states = zip(*samples)
+                states, actions, rewards, next_states, dones, future_states, row_hints, col_hints = zip(*samples)
                 batch = {
                     "states": list(states),
                     "actions": list(actions),
@@ -243,6 +277,8 @@ class DQNAgent(BaseAgent):
                     "next_states": list(next_states),
                     "dones": list(dones),
                     "future_states": list(future_states),
+                    "row_hints": list(row_hints),
+                    "col_hints": list(col_hints),
                 }
             else:
                 batch = self._sample_batch()
@@ -264,15 +300,34 @@ class DQNAgent(BaseAgent):
         b_futures = torch.tensor(np.array(batch["future_states"]),
                                  dtype=torch.float32, device=self.device)
 
-        # Current Q
-        q_pred = self.q_net(b_states).gather(
-            1, b_actions.unsqueeze(1)
-        ).squeeze(1)
+        model_type = self.config["model"]["type"]
+        is_2d_board_model = model_type in ("board_cnn", "board_transformer")
 
-        # Target Q
-        with torch.no_grad():
-            next_q = self._compute_target_q(b_next_states, batch["next_states"], N)
-            target = b_rewards + (1.0 - b_dones) * gamma * next_q
+        # 2D 보드 모델의 경우 힌트 정보 패딩 텐서 생성
+        if is_2d_board_model:
+            k = hint_length(N)
+            padded_rh = torch.tensor(pad_hints_batch(batch["row_hints"], k, N), dtype=torch.long, device=self.device)
+            padded_ch = torch.tensor(pad_hints_batch(batch["col_hints"], k, N), dtype=torch.long, device=self.device)
+            
+            # Current Q
+            q_pred = self.q_net(b_states, padded_rh, padded_ch).gather(
+                1, b_actions.unsqueeze(1)
+            ).squeeze(1)
+            
+            # Target Q
+            with torch.no_grad():
+                next_q = self._compute_target_q(b_next_states, batch["next_states"], N, padded_rh, padded_ch)
+                target = b_rewards + (1.0 - b_dones) * gamma * next_q
+        else:
+            # Current Q
+            q_pred = self.q_net(b_states).gather(
+                1, b_actions.unsqueeze(1)
+            ).squeeze(1)
+            
+            # Target Q
+            with torch.no_grad():
+                next_q = self._compute_target_q(b_next_states, batch["next_states"], N)
+                target = b_rewards + (1.0 - b_dones) * gamma * next_q
 
         # TD-Error 업데이트
         td_errors = torch.abs(q_pred - target).detach().cpu().numpy()
@@ -285,7 +340,10 @@ class DQNAgent(BaseAgent):
         
         if lql_weight > 0:
             with torch.no_grad():
-                next_v_lql = self._compute_target_q(b_futures, batch["future_states"], N)
+                if is_2d_board_model:
+                    next_v_lql = self._compute_target_q(b_futures, batch["future_states"], N, padded_rh, padded_ch)
+                else:
+                    next_v_lql = self._compute_target_q(b_futures, batch["future_states"], N)
             lql_loss = torch.mean(torch.nn.functional.relu(next_v_lql - q_pred)**2)
 
         # Loss 계산 및 IS 가중치 적용
@@ -343,7 +401,7 @@ class DQNAgent(BaseAgent):
         """Replay buffer에서 미니배치 샘플링."""
         batch_size = self.agent_cfg["batch_size"]
         samples = random.sample(self.buffer, batch_size)
-        states, actions, rewards, next_states, dones, future_states = zip(*samples)
+        states, actions, rewards, next_states, dones, future_states, row_hints, col_hints = zip(*samples)
         return {
             "states": list(states),
             "actions": list(actions),
@@ -351,12 +409,19 @@ class DQNAgent(BaseAgent):
             "next_states": list(next_states),
             "dones": list(dones),
             "future_states": list(future_states),
+            "row_hints": list(row_hints),
+            "col_hints": list(col_hints),
         }
 
     def _compute_target_q(self, next_states_t: torch.Tensor,
-                          next_states_np: list, N: int) -> torch.Tensor:
+                          next_states_np: list, N: int,
+                          row_hints_t: torch.Tensor | None = None,
+                          col_hints_t: torch.Tensor | None = None) -> torch.Tensor:
         """Target Q 계산 (표준 DQN: max_a' Q_target(s', a'))."""
-        next_q = self.target_net(next_states_t)
+        if row_hints_t is not None and col_hints_t is not None:
+            next_q = self.target_net(next_states_t, row_hints_t, col_hints_t)
+        else:
+            next_q = self.target_net(next_states_t)
         # 무효 action 마스킹
         next_masks = np.stack([valid_actions_mask(s, N) for s in next_states_np])
         next_masks_t = torch.tensor(next_masks, dtype=torch.float32, device=self.device)

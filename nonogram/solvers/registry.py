@@ -20,4 +20,4 @@ def create_solver(config: dict, **kwargs):
 
 
 # Import all solver modules to trigger registration
-from nonogram.solvers import line_solver, board_solver  # noqa: E402, F401
+from nonogram.solvers import line_solver, board_solver, hybrid_solver  # noqa: E402, F401

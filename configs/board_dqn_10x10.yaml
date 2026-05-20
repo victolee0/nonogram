@@ -4,6 +4,7 @@ env:
   N: 10
   reward_type: "feasibility" # sparse | feasibility | step_correct
   early_stop: true
+  use_feasible_mask: true    # dynamic feasibility masking 활성화
   reward_shaping: false
   reward_shaping_weight: 0.1
 

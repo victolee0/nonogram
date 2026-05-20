@@ -53,7 +53,8 @@
 │   ├── solvers/                # 2D 풀이 전략
 │   │   ├── registry.py         # 풀이기 레지스트리
 │   │   ├── line_solver.py      # 줄 교대 풀이 (DQN 기반 2D 풀이)
-│   │   └── board_solver.py     # 보드 레벨 풀이
+│   │   ├── board_solver.py     # 보드 레벨 풀이
+│   │   └── hybrid_solver.py    # 1D DFS와 2D RL의 계층적 하이브리드 풀이 [NEW]
 │   └── utils/                  # 유틸리티
 │       ├── visualization.py    # 보드 렌더링
 │       └── puzzle_io.py        # 퍼즐 I/O (YAML, CLI)
@@ -70,7 +71,8 @@
 │   ├── train.py                # 최신 모듈형 1D/2D 학습
 │   ├── evaluate.py             # 최신 모듈형 솔버 평가
 │   ├── evaluate_1d.py          # 최신 모듈형 1D Q-net 평가
-│   └── inference.py            # 최신 모듈형 1D 추론 시각화
+│   ├── inference.py            # 최신 모듈형 1D 추론 시각화
+│   └── train_parallel.py       # Ray 기반 대규모 병렬/분산 학습 [NEW]
 ├── runs/                       # 실험 결과 (실험별 하위 폴더)
 └── README.md
 ```
@@ -147,6 +149,12 @@ uv sync
 - **동적 보상 온도 어닐링 (Reward Temperature Annealing)**: 초반 탐색을 촉진하고 국소 최적(Local Optima)에 갇히는 현상을 예방하기 위해, 보상 지수 스케일 온도(`reward_temp`)를 에피소드 진행에 따라 점진적으로 증가시키는 스케줄러(80% 시점에서 최대 온도 도달)를 적용합니다.
 - **완벽 정답 보상 임계치 기반 성공 판정**: 조기 종료 페널티(`epsilon`)를 피했을 뿐인 오답 궤적을 성공으로 기록하던 오류(Fake Success)를 방지하기 위해, 완벽한 정답 보상 임계치($e^{\text{temp} \times 2.0} \times 0.99$)에 실제로 도달했는지를 엄격히 대조하여 성공을 판정합니다.
 - **적용 대상**: `configs/gflownet_10x10.yaml`로 훈련 가능.
+
+### 8. 1D DFS & 2D RL 계층적 하이브리드 솔버 (Hierarchical Hybrid Solver) 및 Dynamic Pruning 탑재 [NEW]
+노노그램의 성능과 정답률을 기하학적으로 끌어올리기 위해, 1D의 강력한 논리적 모순 제거력(DFS 백트래킹)과 2D의 글로벌 공간 맥락 지각력(2D Board RL 에이전트)을 유기적으로 융합하였습니다.
+- **2D Board 힌트 유실 해소 (GRU/Transformer 힌트 임베딩)**: 2D 보드 모델(`board_cnn`, `board_transformer`)이 단순 힌트 합산 스칼라 브로드캐스트 대신, 힌트 시퀀스 원형을 GRU 및 Attention 구조로 직접 흡수·융합하도록 개선하여 정보 병목을 해소하였습니다.
+- **동적 Action Masking (Feasibility Pruning)**: 각 칸에 가상 착수를 시도하여 가치 조건이 위배되는 불가능한 액션(Infeasible action)들을 $O(N)$으로 정밀 검사해 강제로 배제($-\infty$ 마스킹)합니다.
+- **계층적 하이브리드 솔버 (`HybridSolver`)**: 1D Line Solver의 강력한 줄 단위 백트래킹 DFS를 골격으로 유지하되, 추론이 정체되는 교착(Deadlock) 지점에서 2D Board Q-network를 호출하여 전체 보드 가치가 가장 높은 최선의 한 수를 추천받아 탐색 실패를 타개합니다.
 
 ---
 
@@ -228,6 +236,31 @@ def select_action_chunk(self, state, mask, explore=True):
 # 척에 들어있는 액션들을 순차적으로 실행하되, 척 적용 전의 state_before_chunk와
 # 적용 완료 후의 next_state, 그리고 척 누적 보상을 한데 묶어 Replay Buffer에 각 액션별로 저장합니다.
 # 이를 통해 TD 학습 시 N-step 도약 백업 효과(Skipped TD-backup)를 누릴 수 있습니다.
+
+### 1D DFS & 2D RL 계층적 하이브리드 솔버 (`nonogram/solvers/hybrid_solver.py`)
+
+```python
+class HybridSolver(LineSolver):
+    """1D DFS 논리 추론 + 2D Board RL 글로벌 공간 추론 하이브리드 솔버."""
+    def _get_best_guess_candidate(self, board, row_hints_padded, col_hints_padded, N):
+        if self.q_net_2d is None:
+            # 2D 모델이 준비되지 않은 경우 1D DFS candidate 탐색 방식으로 폴백
+            return super()._get_best_guess_candidate(board, row_hints_padded, col_hints_padded, N)
+
+        # 1. 2D 보드 상태 빌드
+        state_2d = self._build_board_state_2d(board, row_hints_clean, col_hints_clean, N)
+        state_t = torch.tensor(state_2d, dtype=torch.float32, device=self.device).unsqueeze(0)
+        
+        # 2. 2D 힌트 배치 패딩 생성 및 2D Q-network 포워딩
+        padded_rh = torch.tensor(pad_hints_batch([row_hints_clean], k, N), dtype=torch.long, device=self.device)
+        padded_ch = torch.tensor(pad_hints_batch([col_hints_clean], k, N), dtype=torch.long, device=self.device)
+        q_values = self.q_net_2d(state_t, padded_rh, padded_ch).squeeze(0).cpu().numpy()
+
+        # 3. 미확정 셀 중 Q-value가 최대인 글로벌 액션 선출 및 DFS 이진 분기 유도
+        best_act = int(np.argmax(q_values))
+        ...
+        return "row", r, c, f, -f, q_val
+```
 ```
 
 ---
@@ -285,6 +318,18 @@ uv run python scripts/train.py --config configs/crl_line_her_10x10.yaml
 uv run python scripts/train.py --config configs/gflownet_10x10.yaml
 ```
 
+### Ray 기반 대규모 병렬 강화학습 (scripts/train_parallel.py) [NEW]
+
+여러 CPU Rollout Worker를 비동기적으로 실행하여 에피소드를 병렬로 빠르게 수집하고, 메인 Learner 프로세스(GPU 지원)에서 가중치 업데이트 및 브로드캐스트를 수행하여 10x10 크기의 고차원 보드 학습 수렴 성능을 획기적으로 향상시킵니다.
+
+```bash
+# 10x10 2D Board DQN 모델을 4개 Ray CPU 워커로 대규모 가속 병렬 학습
+uv run python scripts/train_parallel.py --config configs/board_dqn_10x10.yaml --num_workers 4
+
+# 10x10 Double DQN Dueling 모델을 8개 Ray CPU 워커로 병렬 학습
+uv run python scripts/train_parallel.py --config configs/double_dqn_10x10.yaml --num_workers 8
+```
+
 ### AlphaZero 2D 학습 (train_alphazero.py)
 
 ```bash
@@ -319,6 +364,7 @@ uv run python scripts/inference.py --config configs/double_dqn_10x10.yaml --hint
 | :--- | :--- | :--- | :--- |
 | `env.N` | Integer | NOT NULL, $\ge 5$ | 노노그램 보드 크기 ($N \times N$) |
 | `env.reward_type` | String | sparse \| feasibility \| step_correct | 에이전트의 보상 형태 |
+| `env.use_feasible_mask`| Boolean | NOT NULL | dynamic feasibility masking 활성화 여부 |
 | `model.type` | String | mlp \| dueling \| cnn \| board_cnn \| deep_crl \| deep_line_crl \| symmetry_gnn | 가치/정책/대비/GFlowNet 네트워크 구조 |
 | `model.num_layers` | Integer | $\ge 1$ | 초심층 대비 학습 모델 레이어 수 (ResNet 1D/2D 블록 수) |
 | `model.dropout` | Float | $0.0 \sim 1.0$ | 드롭아웃 확률 |
@@ -344,6 +390,7 @@ uv run python scripts/inference.py --config configs/double_dqn_10x10.yaml --hint
 | `training.curriculum.adaptive_step`| Float | NOT NULL | 성과 판정 시 조정할 reveal_ratio 증감 보폭 (adaptive 용, 기본 0.02) |
 | `solver.min_guess_q` | Float | NOT NULL | 교착 상태 DFS Guessing 진입을 위한 최저 Q-value 신뢰도 임계값 (기본 0.05) |
 | `solver.max_backtracks` | Integer | NOT NULL | 무한 백트래킹 탐색 헬(Hell) 방지를 위한 최대 백트랙 시도 허용 횟수 (기본 1000) |
+| `solver.board_checkpoint`| String | NOT NULL | Hybrid Solver에서 글로벌 가치 평가로 활용할 2D 보드 모델의 체크포인트 파일 경로 |
 
 ### 2. 체크포인트 테이블 (`runs/{exp_name}/checkpoints/*.pt`)
 | 필드명 | 데이터 타입 | 제약 조건 | 설명 |
@@ -378,6 +425,7 @@ uv run python scripts/inference.py --config configs/double_dqn_10x10.yaml --hint
 | Contrastive RL 1D 10x10 | `crl_line_clue_10x10.yaml` & `crl_line_her_10x10.yaml` | 초심층 ResNet1D + InfoNCE 학습 안정성 검증 완료 |
 | AlphaZero 2D 10x10 | `alphazero_2d.yaml` | Axial-Attention + LQL 튜닝 및 학습 재개 |
 | GFlowNet 2D 10x10 | `gflownet_10x10.yaml` | Symmetry-Aware Bipartite GNN + Trajectory Balance 학습 파이프라인 검증 완료 |
+| 1D DFS & 2D RL 하이브리드 솔버 | `configs/double_dqn_10x10.yaml` + `--solver.type hybrid` | 2D 보드 모델(`board_cnn`) 연동 성공 및 교착 상태 돌파 추론 정상 작동 확인 |
 
 ---
 

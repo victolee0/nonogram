@@ -20,6 +20,20 @@ from nonogram.agents.registry import register_agent
 from nonogram.env.state import hint_length
 
 
+def pad_hints_batch(hints_list, k, N):
+    """배치 안의 다양한 길이의 단서 리스트를 (B, N, k) 텐서 크기로 제로 패딩."""
+    B = len(hints_list)
+    padded_batch = np.zeros((B, N, k), dtype=np.int64)
+    for b in range(B):
+        if hints_list[b] is None:
+            continue
+        for i in range(N):
+            actual = [int(x) for x in hints_list[b][i] if int(x) > 0]
+            pad_len = k - len(actual)
+            padded_batch[b, i, pad_len:] = actual
+    return padded_batch
+
+
 class ActorCriticNetwork(nn.Module):
     """Actor-Critic 네트워크 (공유 backbone + 분리된 head)."""
 
@@ -89,7 +103,7 @@ class ActorCriticNetwork(nn.Module):
             nn.Linear(hidden_dim // 2, 1),
         )
 
-    def forward(self, x):
+    def forward(self, x, row_hints_t=None, col_hints_t=None):
         if self.env_type == "board":
             if self.model_type == "board_gnn":
                 x = self.gnn(x)
@@ -98,9 +112,9 @@ class ActorCriticNetwork(nn.Module):
         features = self.shared(x)
         return self.actor(features), self.critic(features)
 
-    def get_action_and_value(self, x, mask, action=None):
+    def get_action_and_value(self, x, mask, action=None, row_hints_t=None, col_hints_t=None):
         """Action 샘플링 + log_prob + entropy + value 계산."""
-        logits, value = self.forward(x)
+        logits, value = self.forward(x, row_hints_t, col_hints_t)
         # 무효 action 마스킹
         logits = logits.masked_fill(mask == 0, -1e9)
         dist = Categorical(logits=logits)
@@ -144,15 +158,26 @@ class PPOAgent(BaseAgent):
         self.rollout: list[dict] = []
 
     def select_action(self, state: np.ndarray, mask: np.ndarray,
-                      explore: bool = True) -> int:
+                      explore: bool = True, row_hints: list | None = None, col_hints: list | None = None) -> int:
         """Policy에서 action 샘플링."""
         with torch.no_grad():
             state_t = torch.tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
             mask_t = torch.tensor(mask, dtype=torch.float32, device=self.device).unsqueeze(0)
 
-            action, log_prob, _, value = self.network.get_action_and_value(
-                state_t, mask_t
-            )
+            # 2D 보드 환경인 경우에만 힌트 텐서 가공하여 전달
+            env_type = self.config["env"].get("type", "line")
+            if env_type == "board" and row_hints is not None and col_hints is not None:
+                N = self.config["env"]["N"]
+                k = hint_length(N)
+                padded_rh = torch.tensor(pad_hints_batch([row_hints], k, N), dtype=torch.long, device=self.device)
+                padded_ch = torch.tensor(pad_hints_batch([col_hints], k, N), dtype=torch.long, device=self.device)
+                action, log_prob, _, value = self.network.get_action_and_value(
+                    state_t, mask_t, row_hints_t=padded_rh, col_hints_t=padded_ch
+                )
+            else:
+                action, log_prob, _, value = self.network.get_action_and_value(
+                    state_t, mask_t
+                )
 
         action_int = action.item()
 
@@ -162,7 +187,7 @@ class PPOAgent(BaseAgent):
 
         return action_int
 
-    def store_transition(self, state, action, reward, next_state, done, mask):
+    def store_transition(self, state, action, reward, next_state, done, mask, row_hints=None, col_hints=None):
         """Rollout buffer에 transition 저장."""
         self.rollout.append({
             "state": state.copy(),
@@ -172,6 +197,8 @@ class PPOAgent(BaseAgent):
             "mask": mask.copy(),
             "log_prob": self._last_log_prob,
             "value": self._last_value,
+            "row_hints": row_hints,
+            "col_hints": col_hints,
         })
 
     def update(self, batch: dict[str, Any] | None = None) -> dict[str, float]:
@@ -201,15 +228,31 @@ class PPOAgent(BaseAgent):
         returns_t = torch.tensor(returns, dtype=torch.float32, device=self.device)
         advantages_t = torch.tensor(advantages, dtype=torch.float32, device=self.device)
 
+        # 2D 보드 환경인 경우 힌트 가공
+        env_type = self.config["env"].get("type", "line")
+        N = self.config["env"]["N"]
+        is_board = (env_type == "board")
+        if is_board:
+            k = hint_length(N)
+            padded_rh = torch.tensor(pad_hints_batch([t["row_hints"] for t in self.rollout], k, N), dtype=torch.long, device=self.device)
+            padded_ch = torch.tensor(pad_hints_batch([t["col_hints"] for t in self.rollout], k, N), dtype=torch.long, device=self.device)
+        else:
+            padded_rh, padded_ch = None, None
+
         # Normalize advantages
         if len(advantages_t) > 1:
             advantages_t = (advantages_t - advantages_t.mean()) / (advantages_t.std() + 1e-8)
 
         total_loss = 0.0
         for _ in range(self.ppo_epochs):
-            _, new_log_probs, entropy, new_values = self.network.get_action_and_value(
-                states, masks, actions
-            )
+            if is_board:
+                _, new_log_probs, entropy, new_values = self.network.get_action_and_value(
+                    states, masks, actions, row_hints_t=padded_rh, col_hints_t=padded_ch
+                )
+            else:
+                _, new_log_probs, entropy, new_values = self.network.get_action_and_value(
+                    states, masks, actions
+                )
 
             # Policy loss (clipped surrogate)
             ratio = torch.exp(new_log_probs - old_log_probs)

@@ -21,7 +21,9 @@ class DoubleDQNAgent(DQNAgent):
     """
 
     def _compute_target_q(self, next_states_t: torch.Tensor,
-                          next_states_np: list, N: int) -> torch.Tensor:
+                          next_states_np: list, N: int,
+                          row_hints_t: torch.Tensor | None = None,
+                          col_hints_t: torch.Tensor | None = None) -> torch.Tensor:
         """Double DQN target Q:
         1. Online network로 best action 선택
         2. Target network로 그 action의 Q값 평가
@@ -31,12 +33,18 @@ class DoubleDQNAgent(DQNAgent):
         next_masks_t = torch.tensor(next_masks, dtype=torch.float32, device=self.device)
 
         # 1. Online net으로 action 선택
-        online_q = self.q_net(next_states_t)
+        if row_hints_t is not None and col_hints_t is not None:
+            online_q = self.q_net(next_states_t, row_hints_t, col_hints_t)
+        else:
+            online_q = self.q_net(next_states_t)
         online_q = online_q.masked_fill(next_masks_t == 0, -1e9)
         best_actions = online_q.argmax(dim=1, keepdim=True)   # (batch, 1)
 
         # 2. Target net으로 그 action의 가치 평가
-        target_q = self.target_net(next_states_t)
+        if row_hints_t is not None and col_hints_t is not None:
+            target_q = self.target_net(next_states_t, row_hints_t, col_hints_t)
+        else:
+            target_q = self.target_net(next_states_t)
         target_q_selected = target_q.gather(1, best_actions).squeeze(1)
 
         return target_q_selected

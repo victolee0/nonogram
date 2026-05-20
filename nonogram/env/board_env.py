@@ -216,3 +216,86 @@ class BoardEnv:
         for j, hints in enumerate(self.col_hints):
             total = sum(h for h in hints if h > 0)
             self._col_hint_features[:, j] = total / self.N
+
+    def is_line_feasible(self, line: np.ndarray, hints: list[int]) -> bool:
+        """한 줄의 상태와 힌트가 주어졌을 때, 힌트 제약을 만족하는 배치가 존재하는지 DP로 판별."""
+        cleaned_hints = [h for h in hints if h > 0]
+        n = len(line)
+        m = len(cleaned_hints)
+        
+        if m == 0:
+            # 단서가 없으면 1이 하나도 없어야 함
+            return not np.any(line == 1)
+            
+        dp = [[False] * (m + 1) for _ in range(n + 1)]
+        dp[0][0] = True
+        
+        # line에 1이 없는 동안 dp[i][0]은 True일 수 있음
+        for i in range(1, n + 1):
+            if line[i-1] != 1:
+                dp[i][0] = dp[i-1][0]
+            else:
+                break
+                
+        for i in range(1, n + 1):
+            for j in range(1, m + 1):
+                # Case 1: i-1번째 셀을 X(-1) 또는 Unknown(0)으로 두는 경우 (1이 아니어야 함)
+                if line[i-1] != 1:
+                    if dp[i-1][j]:
+                        dp[i][j] = True
+                        continue
+                
+                # Case 2: i-1번째 셀을 힌트 j-1(크기 W)의 끝으로 매칭하는 경우
+                W = cleaned_hints[j-1]
+                if i >= W:
+                    # W 크기만큼 1로 채울 수 있는지 확인 (X(-1)가 없어야 함)
+                    can_fill = not np.any(line[i-W:i] == -1)
+                    if can_fill:
+                        # 바로 앞 셀은 1이 아니어야 함 (경계를 넘지 않을 때만)
+                        if i == W:
+                            if dp[0][j-1]:
+                                dp[i][j] = True
+                        else:
+                            if line[i-W-1] != 1 and dp[i-W-1][j-1]:
+                                dp[i][j] = True
+        return dp[n][m]
+
+    def get_feasible_action_mask(self) -> np.ndarray:
+        """현재 보드 상태에서 가상 착수 feasibility 검사를 통한 액션 마스크 생성."""
+        mask = np.zeros(2 * self.N * self.N, dtype=np.float32)
+        
+        # 1. 이미 착수된 곳 제외용 valid mask
+        valid_mask = self.get_valid_mask()
+        
+        # 2. 각 cell에 대해 paint(1)와 X(-1) 가상 시뮬레이션
+        for i in range(self.N * self.N):
+            if valid_mask[i] == 0:
+                continue
+                
+            r = i // self.N
+            c = i % self.N
+            
+            # Paint(1) 액션 타당성 점검
+            self.board[r, c] = 1
+            row_ok = self.is_line_feasible(self.board[r, :], self.row_hints[r])
+            col_ok = False
+            if row_ok:
+                col_ok = self.is_line_feasible(self.board[:, c], self.col_hints[c])
+            self.board[r, c] = 0  # 복구
+            
+            if row_ok and col_ok:
+                mask[i] = 1.0
+                
+            # X(-1) 액션 타당성 점검
+            self.board[r, c] = -1
+            row_ok = self.is_line_feasible(self.board[r, :], self.row_hints[r])
+            col_ok = False
+            if row_ok:
+                col_ok = self.is_line_feasible(self.board[:, c], self.col_hints[c])
+            self.board[r, c] = 0  # 복구
+            
+            if row_ok and col_ok:
+                mask[self.N * self.N + i] = 1.0
+                
+        return mask
+

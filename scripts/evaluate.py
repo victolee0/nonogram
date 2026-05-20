@@ -159,7 +159,7 @@ def main():
         row_hints, col_hints = extract_hints_from_board(gt)
 
         t0 = time.time()
-        solver_board = solver.solve(N=N, row_hints=row_hints, col_hints=col_hints)
+        solver_board = solver.solve(N=N, row_hints=row_hints, col_hints=col_hints, verbose=True)
         solve_times.append(time.time() - t0)
 
         stats = evaluate_solution(solver_board, row_hints, col_hints, gt)
