@@ -71,7 +71,7 @@ def train_dqn_family(config: dict, device: torch.device):
 
     reward_history = []
     success_history = []
-    best_success_rate = 0.0
+    best_success_rate = -1.0
 
     print(f"Training {config['agent']['type']} + {config['model']['type']} "
           f"(N={N}) on {device}", flush=True)
@@ -247,21 +247,49 @@ def train_dqn_family(config: dict, device: torch.device):
             avg_s = float(np.mean(success_history[-window:]))
             elapsed = time.time() - t_start
             eps = agent.get_epsilon()
+
+            # --- Greedy Evaluation (reveal_ratio = 0.0) ---
+            eval_successes = []
+            for _ in range(50):
+                eval_state = env.reset(reveal_ratio=0.0)
+                eval_done = False
+                eval_reward = 0.0
+                while not eval_done:
+                    eval_mask = env.get_valid_mask()
+                    row_hints = getattr(env, "row_hints", None)
+                    col_hints = getattr(env, "col_hints", None)
+                    eval_a = agent.select_action(eval_state, eval_mask, explore=False, row_hints=row_hints, col_hints=col_hints)
+                    if eval_a is None:
+                        break
+                    eval_ns, eval_r, eval_done = env.step(eval_a)
+                    eval_state = eval_ns
+                    eval_reward += eval_r
+                
+                if env_type == "board":
+                    eval_success = (eval_r == 1.0)
+                else:
+                    eval_success = (eval_reward > 0)
+                eval_successes.append(1.0 if eval_success else 0.0)
+            
+            eval_s = float(np.mean(eval_successes))
+
             if curriculum_cfg.get("enabled", False):
                 print(f"[ep {episode+1:6d}/{training_cfg['num_episodes']}] "
                       f"avg_reward={avg_r:+.3f}  success_rate={avg_s:.3f}  "
+                      f"eval_success_rate={eval_s:.3f}  "
                       f"reveal={reveal_ratio:.3f}  "
                       f"ε={eps:.3f}  buffer={len(agent.buffer)}  "
                       f"steps={agent.step_count}  ({elapsed:.0f}s)", flush=True)
             else:
                 print(f"[ep {episode+1:6d}/{training_cfg['num_episodes']}] "
                       f"avg_reward={avg_r:+.3f}  success_rate={avg_s:.3f}  "
+                      f"eval_success_rate={eval_s:.3f}  "
                       f"ε={eps:.3f}  buffer={len(agent.buffer)}  "
                       f"steps={agent.step_count}  ({elapsed:.0f}s)", flush=True)
 
-            # Best model 저장
-            if avg_s > best_success_rate:
-                best_success_rate = avg_s
+            # Best model 저장 (평가 환경에서의 성공률 기준)
+            if eval_s > best_success_rate:
+                best_success_rate = eval_s
                 best_path = exp_dir / "checkpoints" / "best.pt"
                 agent.save(best_path)
 
@@ -302,7 +330,7 @@ def train_ppo(config: dict, device: torch.device):
     reward_history = []
     success_history = []
     episodes_since_update = 0
-    best_success_rate = 0.0
+    best_success_rate = -1.0
 
     print(f"Training PPO (N={N}) on {device}")
     if env_type == "board":
@@ -413,18 +441,46 @@ def train_ppo(config: dict, device: torch.device):
             avg_r = float(np.mean(reward_history[-window:]))
             avg_s = float(np.mean(success_history[-window:]))
             elapsed = time.time() - t_start
+
+            # --- Greedy Evaluation (reveal_ratio = 0.0) ---
+            eval_successes = []
+            for _ in range(50):
+                eval_state = env.reset(reveal_ratio=0.0)
+                eval_done = False
+                eval_reward = 0.0
+                while not eval_done:
+                    eval_mask = env.get_valid_mask()
+                    row_hints = getattr(env, "row_hints", None)
+                    col_hints = getattr(env, "col_hints", None)
+                    eval_a = agent.select_action(eval_state, eval_mask, explore=False, row_hints=row_hints, col_hints=col_hints)
+                    if eval_a is None:
+                        break
+                    eval_ns, eval_r, eval_done = env.step(eval_a)
+                    eval_state = eval_ns
+                    eval_reward += eval_r
+                
+                if env_type == "board":
+                    eval_success = (eval_r == 1.0)
+                else:
+                    eval_success = (eval_reward > 0)
+                eval_successes.append(1.0 if eval_success else 0.0)
+            
+            eval_s = float(np.mean(eval_successes))
+
             if curriculum_cfg.get("enabled", False) and env_type == "board":
                 print(f"[ep {episode+1:6d}/{training_cfg['num_episodes']}] "
                       f"avg_reward={avg_r:+.3f}  success_rate={avg_s:.3f}  "
+                      f"eval_success_rate={eval_s:.3f}  "
                       f"reveal={reveal_ratio:.3f}  "
                       f"steps={agent.step_count}  ({elapsed:.0f}s)")
             else:
                 print(f"[ep {episode+1:6d}/{training_cfg['num_episodes']}] "
                       f"avg_reward={avg_r:+.3f}  success_rate={avg_s:.3f}  "
+                      f"eval_success_rate={eval_s:.3f}  "
                       f"steps={agent.step_count}  ({elapsed:.0f}s)")
 
-            if avg_s > best_success_rate:
-                best_success_rate = avg_s
+            if eval_s > best_success_rate:
+                best_success_rate = eval_s
                 best_path = exp_dir / "checkpoints" / "best.pt"
                 agent.save(best_path)
 

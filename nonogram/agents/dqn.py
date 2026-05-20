@@ -17,7 +17,7 @@ import torch.optim as optim
 from nonogram.agents.base import BaseAgent
 from nonogram.agents.registry import register_agent
 from nonogram.models.registry import create_model
-from nonogram.env.state import valid_actions_mask, hint_length
+from nonogram.env.state import valid_actions_mask, hint_length, is_terminal
 
 
 def pad_hints_batch(hints_list, k, N):
@@ -344,7 +344,13 @@ class DQNAgent(BaseAgent):
                     next_v_lql = self._compute_target_q(b_futures, batch["future_states"], N, padded_rh, padded_ch)
                 else:
                     next_v_lql = self._compute_target_q(b_futures, batch["future_states"], N)
-            lql_loss = torch.mean(torch.nn.functional.relu(next_v_lql - q_pred)**2)
+            
+            # future_state가 terminal인지 판정하여 마스킹 (terminal 상태의 가치는 감수하므로 상한 없음)
+            future_dones = torch.tensor(
+                [float(is_terminal(s, N)) for s in batch["future_states"]],
+                dtype=torch.float32, device=self.device
+            )
+            lql_loss = torch.mean((1.0 - future_dones) * torch.nn.functional.relu(next_v_lql - q_pred)**2)
 
         # Loss 계산 및 IS 가중치 적용
         if self.use_per and is_weights is not None:

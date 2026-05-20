@@ -71,6 +71,9 @@ class LineEnv:
                 reward = 0.1
             else:
                 reward = -0.1
+        elif self.reward_type == "feasibility_dense":
+            # 여기까지 살아남았다면 (early stop되지 않았다면) 합법적이고 타당한(feasible) 수이므로 보상 부여
+            reward = 0.1
                 
         return self.state, reward, False
 

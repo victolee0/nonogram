@@ -16,6 +16,7 @@
 │   ├── dqn_5x5.yaml            # 5x5 표준 DQN
 │   ├── dqn_10x10.yaml          # 10x10 표준 DQN
 │   ├── double_dqn_10x10.yaml   # 10x10 Double DQN + Dueling
+│   ├── dqn_10x10_super_1d.yaml # 10x10 Double DQN 1D 성능 극대화 설정
 │   ├── ppo_10x10.yaml          # 10x10 PPO
 │   ├── board_dqn_10x10.yaml    # 10x10 2D Board DQN
 │   ├── dqn_chunking_mlp_10x10.yaml  # 10x10 DQN + Action Chunking (MLP)
@@ -278,6 +279,9 @@ uv run python scripts/train.py --config configs/dqn_5x5.yaml
 # 10x10 Double DQN + Dueling 학습 (LQL 탑재, 1D 줄 단위)
 uv run python scripts/train.py --config configs/double_dqn_10x10.yaml
 
+# 10x10 1D 극대화 모델 학습 (dense reward + curriculum + towards 혼합)
+uv run python scripts/train.py --config configs/dqn_10x10_super_1d.yaml
+
 # 10x10 DQN + Board CNN 학습 (LQL 탑재, 2D 보드 단위)
 uv run python scripts/train.py --config configs/board_dqn_10x10.yaml
 
@@ -420,6 +424,7 @@ uv run python scripts/inference.py --config configs/double_dqn_10x10.yaml --hint
 | 1D DQN 5x5 | `dqn_5x5.yaml` | hint_satisfied **98%**, exact_match **90%** |
 | 1D DQN 10x10 | `dqn_10x10.yaml` | 학습 수렴 확인 |
 | Double DQN 10x10 | `double_dqn_10x10.yaml` | LQL 적용 및 체크포인트 최적 보존 완료 |
+| Double DQN 1D 극대화 10x10 | `dqn_10x10_super_1d.yaml` | dense step_correct 보상과 커리큘럼 및 expert demonstration 비율 혼합 적용 |
 | 1D Line Solver (백트래킹 DFS) | `configs/double_dqn_10x10.yaml` | `qnet_N10.pt` 모델 사용, 10x10 퍼즐 완벽 해결 성공률 **30% (3/10)**, cell-level agreement **62.5%** 달성 (평균 unknown cell 28.1개 수준으로 대폭 축소) |
 | Contrastive RL 2D 10x10 | `crl_clue_10x10.yaml` & `crl_her_10x10.yaml` | 초심층 ResNet2D + InfoNCE 학습 안정성 검증 완료 |
 | Contrastive RL 1D 10x10 | `crl_line_clue_10x10.yaml` & `crl_line_her_10x10.yaml` | 초심층 ResNet1D + InfoNCE 학습 안정성 검증 완료 |
