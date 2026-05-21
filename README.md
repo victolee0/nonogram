@@ -164,6 +164,10 @@ AC-3 알고리즘의 고정된 논리적 추론 없이 순수하게 강화학습
 - **Feasibility-Guarded Dense Reward (`feasibility_dense_2d`)**: 매 스텝 에이전트의 착수마다 2D 행/열 Feasibility 유지를 확인하여 타당한 결정이면 +0.01 보상을 지급하고, 제약 조건을 위반하는 오답을 두면 즉시 에피소드를 조기 종료(early stop, -1.0)시켜 학습 수렴을 비약적으로 가속합니다.
 - **Q-value 가이드 DFS 백트래킹 Board Solver**: 2D Board Q-network의 출력값(Q-value)이 높은 착수 후보 순서대로 DFS 백트래킹 탐색을 진행하여, 순수 강화학습 에이전트의 판단에 의존해 2D 보드를 완성시킵니다.
 
+### 10. 1D RL 모델 기반 2D AlphaZero 사전 학습 (1D-Guided BC Pre-training) [NEW]
+- **1D 지식 전이 (Knowledge Distillation)**: 이미 뛰어난 성능으로 훈련된 1D Q-network 모델(`LineSolver`)을 활용하여, 무작위 2D 보드 퍼즐 중 풀 수 있는 성공 궤적(Trajectory)을 추출합니다.
+- **1D-Guided BC Pre-training**: 2D AlphaZero 에이전트가 본격적인 자가 학습(MCTS Self-play) 전에 이 1D 논리적 궤적 데이터를 모방 학습(Behavior Cloning)하여 가중치를 초기화합니다. 이로써 2D 탐색 공간의 극심한 콜드 스타트 문제를 타개하고 수렴 속도를 혁신적으로 끌어올립니다.
+
 ---
 
 ## 핵심 코드
@@ -417,6 +421,9 @@ uv run train_alphazero.py --config configs/alphazero_2d.yaml
 
 # 기존 체크포인트에서 재개
 uv run train_alphazero.py --config configs/alphazero_2d.yaml --resume
+
+# [NEW] 1D RL 모델을 기반으로 2D AlphaZero 사전 학습 후 구동
+uv run python train_alphazero.py --config configs/alphazero_2d_pretrain_1d.yaml
 ```
 
 ### 평가 및 추론 시각화 (scripts/)
@@ -461,6 +468,10 @@ uv run python scripts/inference.py --config configs/double_dqn_10x10.yaml --hint
 | `training.pretrain_bc` | Boolean | NOT NULL | B: MCTS 학습 시작 전 Behavior Cloning 사전 학습 여부 |
 | `training.pretrain_episodes`| Integer | NOT NULL | BC 학습용 궤적 에피소드 수 |
 | `training.pretrain_lr` | Float | NOT NULL | BC 학습용 learning rate |
+| `training.pretrain_1d_model`| String | Option | [NEW] 1D 가이드 BC 학습용 1D Q-net 체크포인트 경로 (예: `qnet_N10.pt`) |
+| `training.pretrain_1d_episodes`| Integer | Option | [NEW] 1D 가이드 BC용 궤적 에피소드 수 (기본 1000) |
+| `training.pretrain_1d_lr` | Float | Option | [NEW] 1D 가이드 BC용 learning rate (기본 0.001) |
+| `training.pretrain_1d_hidden_dim`| Integer | Option | [NEW] 로드할 1D 모델의 hidden_dim (기본 128) |
 | `training.curriculum.enabled`| Boolean | NOT NULL | 역방향 커리큘럼 학습의 활성화 여부 (2D 보드 전용) |
 | `training.curriculum.type` | String | linear \| cosine \| adaptive | 커리큘럼 감쇠 유형 (선형 / 코사인 어닐링 / 성과 기반 적응형) |
 | `training.curriculum.start_ratio`| Float \| String | NOT NULL | 초기 정답 공개 비율 (또는 "auto" 설정 시 2D 보드 내 단 1칸만 비우도록 설정) |
