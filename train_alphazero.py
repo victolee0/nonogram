@@ -598,7 +598,7 @@ def main():
             bc_optimizer = optim.Adam(network.parameters(), lr=args.pretrain_1d_lr, weight_decay=args.weight_decay)
             
             # 에포크 단위 학습
-            num_epochs = 20
+            num_epochs = 5
             batch_size = args.batch_size
             num_batches = len(bc_dataset) // batch_size
             
@@ -631,7 +631,7 @@ def main():
                     policy_loss = -torch.sum(pi_flat * log_probs, dim=-1).mean()
                     value_loss = F.mse_loss(value_pred, b_zs_t)
                     
-                    loss = policy_loss + args.value_loss_weight * value_loss
+                    loss = policy_loss #  + args.value_loss_weight * value_loss
                     
                     bc_optimizer.zero_grad()
                     loss.backward()
@@ -705,7 +705,7 @@ def main():
             policy_loss = -torch.sum(pi_flat * log_probs, dim=-1).mean()
             value_loss = F.mse_loss(value_pred, b_zs_t)
             
-            loss = policy_loss + args.value_loss_weight * value_loss
+            loss = policy_loss # + args.value_loss_weight * value_loss
             
             bc_optimizer.zero_grad()
             loss.backward()
