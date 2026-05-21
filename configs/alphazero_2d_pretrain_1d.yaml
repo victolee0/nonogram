@@ -8,7 +8,7 @@ model:
   num_layers: 4                  # Transformer Blocks depth
 
 agent:
-  num_simulations: 50            # MCTS simulations per step
+  num_simulations: 200            # MCTS simulations per step
   batch_size: 256                
   buffer_size: 100000
   min_buffer: 1000               # Wait until replay buffer has this many steps before learning

@@ -598,7 +598,7 @@ def main():
             bc_optimizer = optim.Adam(network.parameters(), lr=args.pretrain_1d_lr, weight_decay=args.weight_decay)
             
             # 에포크 단위 학습
-            num_epochs = 5
+            num_epochs = 20
             batch_size = args.batch_size
             num_batches = len(bc_dataset) // batch_size
             
