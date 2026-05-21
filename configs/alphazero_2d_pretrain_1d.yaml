@@ -13,7 +13,7 @@ agent:
   buffer_size: 100000
   min_buffer: 1000               # Wait until replay buffer has this many steps before learning
   sync_freq: 5
-  lr: 0.0005                     # RL learning rate
+  lr: 0.0001                     # RL learning rate
   weight_decay: 0.0001
   num_workers: 4                 # Safe number of workers for local machine/Mac
   episodes_per_task: 1           
@@ -41,7 +41,7 @@ training:
   # 1D-Guided BC Pretraining Configuration
   pretrain_1d_model: "runs/double_dqn_10x10_super_1d_double_dqn_dueling_N10/checkpoints/best.pt" # Path to your pretrained 1D RL model
   pretrain_1d_episodes: 500       # Number of demo trajectories to generate using 1D solver
-  pretrain_1d_lr: 0.001           # BC learning rate
+  pretrain_1d_lr: 0.0001           # BC learning rate
   pretrain_1d_hidden_dim: 256     # Must match the hidden_dim of your 1D model (e.g., dqn_10x10_super_1d.yaml hidden_dim is 256)
 
 experiment:

@@ -15,22 +15,21 @@ class AxialAttention(nn.Module):
         self.norm_col = nn.LayerNorm(dim)
 
     def forward(self, x):
-        # x shape: (B, N, N, dim)
         B, N, _, dim = x.shape
         
-        # 1. Row Attention (Attend only to cells in the same row)
-        # Reshape to treat each row as an independent sequence
-        x_row = x.view(B * N, N, dim)
+        # 1. Row Attention (Pre-norm: 정규화 후 Attention 연산, 이후 더하기)
+        x_norm = self.norm_row(x)
+        x_row = x_norm.view(B * N, N, dim)
         out_row, _ = self.row_attn(x_row, x_row, x_row)
         out_row = out_row.view(B, N, N, dim)
-        x = self.norm_row(x + out_row)  # Pre-norm residual
+        x = x + out_row  # Norm 없이 바로 Residual 연결
 
-        # 2. Column Attention (Attend only to cells in the same column)
-        # Transpose and reshape to treat each column as an independent sequence
-        x_col = x.transpose(1, 2).reshape(B * N, N, dim)
+        # 2. Column Attention (Pre-norm)
+        x_norm_col = self.norm_col(x)
+        x_col = x_norm_col.transpose(1, 2).reshape(B * N, N, dim)
         out_col, _ = self.col_attn(x_col, x_col, x_col)
         out_col = out_col.view(B, N, N, dim).transpose(1, 2)
-        x = self.norm_col(x + out_col)  # Pre-norm residual
+        x = x + out_col
 
         return x
 
@@ -47,10 +46,11 @@ class GlobalAttention(nn.Module):
 
     def forward(self, x):
         B, N, _, dim = x.shape
-        x_flat = x.view(B, N * N, dim)
+        x_norm = self.norm(x)
+        x_flat = x_norm.view(B, N * N, dim)
         out, _ = self.attn(x_flat, x_flat, x_flat)
         out = out.view(B, N, N, dim)
-        return self.norm(x + out)
+        return x + out
 
 
 class NonogramTransformerBlock(nn.Module):
@@ -72,7 +72,10 @@ class NonogramTransformerBlock(nn.Module):
     def forward(self, x):
         x = self.axial(x)
         x = self.global_attn(x)
-        x = self.norm(x + self.ffn(x))
+        
+        # FFN 역시 Pre-norm 적용
+        x_norm = self.norm(x)
+        x = x + self.ffn(x_norm)
         return x
 
 
@@ -121,18 +124,24 @@ class AlphaZeroNonogramNet(nn.Module):
             nn.Tanh()
         )
         
+        self.final_norm = nn.LayerNorm(dim)
+        
         # Initialize weights
         self._init_weights()
     
     def _init_weights(self):
-        """Xavier/Kaiming initialization for better training start."""
+        """Transformer에 적합한 Xavier 초기화 적용"""
         for m in self.modules():
             if isinstance(m, nn.Linear):
-                nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
+                nn.init.xavier_uniform_(m.weight)
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
             elif isinstance(m, nn.Embedding):
                 nn.init.normal_(m.weight, mean=0, std=0.02)
+        
+        # [중요] Policy Head의 최종 출력층 가중치를 매우 작게 초기화
+        nn.init.normal_(self.policy_head[-1].weight, std=0.01)
+        nn.init.zeros_(self.policy_head[-1].bias)
 
     def forward(self, board, row_hints, col_hints):
         """
@@ -168,6 +177,9 @@ class AlphaZeroNonogramNet(nn.Module):
         # Pass through Dual-Attention Transformer
         for block in self.blocks:
             x = block(x)
+
+        # Apply final norm because of Pre-norm blocks
+        x = self.final_norm(x)
 
         # Output Policy (B, 2, N, N)
         policy_logits = self.policy_head(x).permute(0, 3, 1, 2)
